@@ -13,7 +13,7 @@ api:
   debug: false
 
 scheduler:
-  url: http://localhost:9000
+  url: https://p3.theseed.org/services/app_service
   timeout: 30
 
 logging:

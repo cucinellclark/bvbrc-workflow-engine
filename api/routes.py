@@ -1,6 +1,6 @@
 """API route handlers."""
-from typing import Dict, Any
-from fastapi import APIRouter, HTTPException, status
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, status, Header
 from pydantic import BaseModel
 
 from core.workflow_manager import WorkflowManager
@@ -42,13 +42,18 @@ class HealthResponse(BaseModel):
     summary="Submit a new workflow",
     description="Submit a workflow for execution. The workflow JSON should not "
                 "contain workflow_id or step_id fields as these are assigned by "
-                "the scheduler."
+                "the scheduler. Authorization token should be provided in the "
+                "Authorization header for scheduler API calls."
 )
-async def submit_workflow(workflow_data: Dict[str, Any]) -> SubmitResponse:
+async def submit_workflow(
+    workflow_data: Dict[str, Any],
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> SubmitResponse:
     """Submit a new workflow.
     
     Args:
         workflow_data: Workflow JSON dictionary
+        authorization: Optional authorization token in Authorization header
         
     Returns:
         Submission response with workflow_id
@@ -59,7 +64,10 @@ async def submit_workflow(workflow_data: Dict[str, Any]) -> SubmitResponse:
     try:
         logger.info("Received workflow submission request")
         
-        result = workflow_manager.submit_workflow(workflow_data)
+        # Extract auth token from Authorization header if provided
+        auth_token = authorization
+        
+        result = workflow_manager.submit_workflow(workflow_data, auth_token=auth_token)
         
         return SubmitResponse(
             workflow_id=result['workflow_id'],

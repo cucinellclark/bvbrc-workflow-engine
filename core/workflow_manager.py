@@ -7,6 +7,7 @@ from core.state_manager import StateManager
 from scheduler.client import SchedulerClient
 from models.workflow import WorkflowStatus, StepStatus
 from utils.logger import get_logger
+from utils.variable_resolver import VariableResolver
 from config.config import config
 
 
@@ -29,41 +30,50 @@ class WorkflowManager:
         
         logger.info("WorkflowManager initialized")
     
-    def submit_workflow(self, workflow_json: Dict[str, Any]) -> Dict[str, str]:
+    def submit_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, str]:
         """Submit a new workflow.
         
         Process:
-        1. Validate workflow JSON
-        2. Submit to scheduler to get IDs assigned
-        3. Save to MongoDB
-        4. Return workflow ID
+        1. Resolve variable placeholders (e.g., ${workspace_output_folder})
+        2. Validate workflow JSON
+        3. Submit to scheduler to get IDs assigned
+        4. Save to MongoDB
+        5. Return workflow ID
         
         Args:
             workflow_json: Raw workflow JSON dictionary
+            auth_token: Optional authorization token for scheduler API calls
             
         Returns:
             Dictionary with workflow_id and status
             
         Raises:
-            ValueError: If validation fails
+            ValueError: If variable resolution or validation fails
             Exception: If submission fails
         """
         try:
             logger.info("Starting workflow submission")
             
-            # Step 1: Validate workflow
-            logger.info("Validating workflow")
-            validated_workflow = self.validator.validate_workflow_input(
+            # Step 1: Resolve variable placeholders
+            logger.info("Resolving variable placeholders")
+            resolved_workflow = VariableResolver.resolve_workflow_variables(
                 workflow_json
             )
             
-            # Step 2: Submit to scheduler to get IDs
-            logger.info("Submitting to scheduler for ID assignment")
-            workflow_with_ids = self.scheduler_client.submit_workflow_to_scheduler(
-                validated_workflow
+            # Step 2: Validate workflow
+            logger.info("Validating workflow")
+            validated_workflow = self.validator.validate_workflow_input(
+                resolved_workflow
             )
             
-            # Step 3: Add initial status and timestamps
+            # Step 3: Submit to scheduler to get IDs
+            logger.info("Submitting to scheduler for ID assignment")
+            workflow_with_ids = self.scheduler_client.submit_workflow_to_scheduler(
+                validated_workflow,
+                auth_token=auth_token
+            )
+            
+            # Step 4: Add initial status and timestamps
             workflow_with_ids['status'] = 'submitted'
             workflow_with_ids['created_at'] = datetime.utcnow()
             workflow_with_ids['updated_at'] = datetime.utcnow()
@@ -73,7 +83,7 @@ class WorkflowManager:
                 if 'status' not in step:
                     step['status'] = 'pending'
             
-            # Step 4: Save to MongoDB
+            # Step 5: Save to MongoDB
             workflow_id = workflow_with_ids['workflow_id']
             logger.info(f"Saving workflow {workflow_id} to database")
             self.state_manager.save_workflow(workflow_with_ids)
