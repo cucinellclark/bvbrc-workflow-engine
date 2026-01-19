@@ -9,6 +9,8 @@ from models.workflow import WorkflowStatus, StepStatus
 from utils.logger import get_logger
 from utils.variable_resolver import VariableResolver
 from config.config import config
+from cwl.converter import CWLConverter
+from cwl.parser import CWLParser
 
 
 logger = get_logger(__name__)
@@ -27,6 +29,10 @@ class WorkflowManager:
             scheduler_url=scheduler_config.get('url'),
             timeout=scheduler_config.get('timeout', 30)
         )
+        
+        # Initialize CWL converter and parser
+        self.cwl_converter = CWLConverter()
+        self.cwl_parser = CWLParser()
         
         logger.info("WorkflowManager initialized")
     
@@ -219,6 +225,71 @@ class WorkflowManager:
             raise ValueError(f"Workflow {workflow_id} not found")
         
         return result
+    
+    def convert_cwl_workflow(self, cwl_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert CWL workflow to custom format.
+        
+        This method converts a CWL workflow to the custom workflow format,
+        which can then be submitted using submit_workflow().
+        
+        Args:
+            cwl_data: CWL workflow dictionary
+            
+        Returns:
+            Custom workflow format dictionary
+            
+        Raises:
+            ValueError: If CWL conversion fails
+        """
+        try:
+            logger.info("Converting CWL workflow to custom format")
+            
+            # Parse and validate CWL
+            cwl_workflow = self.cwl_parser.parse_cwl(cwl_data)
+            self.cwl_parser.validate_cwl_workflow(cwl_workflow)
+            
+            # Convert to custom format
+            custom_workflow = self.cwl_converter.convert(cwl_workflow)
+            
+            logger.info("CWL workflow conversion completed successfully")
+            return custom_workflow
+            
+        except Exception as e:
+            logger.error(f"CWL conversion failed: {e}")
+            raise ValueError(f"Failed to convert CWL workflow: {e}")
+    
+    def submit_cwl_workflow(self, cwl_data: Dict[str, Any], auth_token: str = None) -> Dict[str, str]:
+        """Submit a CWL workflow.
+        
+        This method converts a CWL workflow to custom format and submits it.
+        It's a convenience method that combines convert_cwl_workflow() and submit_workflow().
+        
+        Args:
+            cwl_data: CWL workflow dictionary
+            auth_token: Optional authorization token for scheduler API calls
+            
+        Returns:
+            Dictionary with workflow_id and status
+            
+        Raises:
+            ValueError: If conversion or validation fails
+            Exception: If submission fails
+        """
+        try:
+            logger.info("Starting CWL workflow submission")
+            
+            # Convert CWL to custom format
+            custom_workflow = self.convert_cwl_workflow(cwl_data)
+            
+            # Submit using existing workflow submission pipeline
+            return self.submit_workflow(custom_workflow, auth_token=auth_token)
+            
+        except ValueError as e:
+            logger.error(f"CWL workflow submission failed: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"CWL workflow submission failed: {e}")
+            raise
     
     def close(self):
         """Clean up resources."""

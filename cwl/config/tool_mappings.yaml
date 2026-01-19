@@ -1,0 +1,27 @@
+# Tool mappings from CWL tool references to application names
+# Format: "cwl_tool_reference": "AppName"
+
+tool_mappings:
+  # Metagenomics tools
+  "metagenome-binning.cwl": "MetagenomeBinning"
+  "metagenome_binning.cwl": "MetagenomeBinning"
+  "MetagenomeBinning": "MetagenomeBinning"
+  
+  # Annotation tools
+  "genome-annotation.cwl": "GenomeAnnotation"
+  "genome_annotation.cwl": "GenomeAnnotation"
+  "GenomeAnnotation": "GenomeAnnotation"
+  
+  # Assembly tools
+  "genome-assembly2.cwl": "GenomeAssembly2"
+  "genome_assembly2.cwl": "GenomeAssembly2"
+  "GenomeAssembly2": "GenomeAssembly2"
+  "assembly2.cwl": "GenomeAssembly2"
+  
+  # Comparative analysis tools
+  "comparative-systems.cwl": "ComparativeSystems"
+  "comparative_systems.cwl": "ComparativeSystems"
+  "ComparativeSystems": "ComparativeSystems"
+  
+  # Add more mappings as needed
+

@@ -165,6 +165,60 @@ async def get_workflow(workflow_id: str) -> Dict[str, Any]:
         )
 
 
+@router.post(
+    "/workflows/submit-cwl",
+    response_model=SubmitResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit a CWL workflow",
+    description="Submit a CWL (Common Workflow Language) workflow for execution. "
+                "The CWL workflow will be converted to the internal format and "
+                "submitted. Authorization token should be provided in the "
+                "Authorization header for scheduler API calls."
+)
+async def submit_cwl_workflow(
+    workflow_data: Dict[str, Any],
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> SubmitResponse:
+    """Submit a CWL workflow.
+    
+    Args:
+        workflow_data: CWL workflow dictionary (YAML or JSON format)
+        authorization: Optional authorization token in Authorization header
+        
+    Returns:
+        Submission response with workflow_id
+        
+    Raises:
+        HTTPException: 400 for validation/conversion errors, 500 for server errors
+    """
+    try:
+        logger.info("Received CWL workflow submission request")
+        
+        # Extract auth token from Authorization header if provided
+        auth_token = authorization
+        
+        result = workflow_manager.submit_cwl_workflow(workflow_data, auth_token=auth_token)
+        
+        return SubmitResponse(
+            workflow_id=result['workflow_id'],
+            status=result['status'],
+            message="CWL workflow converted and submitted successfully"
+        )
+        
+    except ValueError as e:
+        logger.error(f"CWL workflow conversion/validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"CWL workflow submission failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
 @router.get(
     "/health",
     response_model=HealthResponse,
