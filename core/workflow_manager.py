@@ -39,12 +39,15 @@ class WorkflowManager:
     def submit_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, str]:
         """Submit a new workflow.
         
+        NEW BEHAVIOR: Does NOT submit to scheduler immediately.
+        The workflow executor will pick up pending workflows and submit steps.
+        
         Process:
         1. Resolve variable placeholders (e.g., ${workspace_output_folder})
         2. Validate workflow JSON
-        3. Submit to scheduler to get IDs assigned
-        4. Save to MongoDB
-        5. Return workflow ID
+        3. Generate workflow_id locally
+        4. Save to MongoDB with status='pending'
+        5. Return workflow ID (executor will pick it up and start execution)
         
         Args:
             workflow_json: Raw workflow JSON dictionary
@@ -72,36 +75,57 @@ class WorkflowManager:
                 resolved_workflow
             )
             
-            # Step 3: Submit to scheduler to get IDs
-            logger.info("Submitting to scheduler for ID assignment")
-            workflow_with_ids = self.scheduler_client.submit_workflow_to_scheduler(
-                validated_workflow,
-                auth_token=auth_token
-            )
+            # Step 3: Generate workflow ID locally (no scheduler call yet)
+            workflow_id = self._generate_workflow_id()
+            logger.info(f"Generated workflow_id: {workflow_id}")
+            
+            # Convert to dict and add workflow_id
+            workflow_dict = validated_workflow.model_dump()
+            workflow_dict['workflow_id'] = workflow_id
             
             # Step 4: Add initial status and timestamps
-            workflow_with_ids['status'] = 'submitted'
-            workflow_with_ids['created_at'] = datetime.utcnow()
-            workflow_with_ids['updated_at'] = datetime.utcnow()
+            workflow_dict['status'] = 'pending'  # Executor will pick this up
+            workflow_dict['created_at'] = datetime.utcnow()
+            workflow_dict['updated_at'] = datetime.utcnow()
             
-            # Initialize step status
-            for step in workflow_with_ids['steps']:
+            # Initialize step status (all pending, no step_ids yet)
+            for step in workflow_dict['steps']:
                 if 'status' not in step:
                     step['status'] = 'pending'
             
+            # Store auth token (plaintext for now - TODO: encrypt)
+            if auth_token:
+                workflow_dict['auth_token'] = auth_token
+            
+            # Initialize execution metadata
+            from models.workflow import ExecutionMetadata
+            workflow_dict['execution_metadata'] = ExecutionMetadata(
+                total_steps=len(workflow_dict['steps']),
+                completed_steps=0,
+                running_steps=0,
+                failed_steps=0,
+                pending_steps=len(workflow_dict['steps']),
+                currently_running_step_ids=[],
+                completed_step_ids=[],
+                max_parallel_steps=2  # Global constant
+            ).model_dump()
+            
+            # Set log file path
+            log_dir = config.logging.get('workflow_log_dir', 'logs/workflows')
+            workflow_dict['log_file_path'] = f"{log_dir}/{workflow_id}.log"
+            
             # Step 5: Save to MongoDB
-            workflow_id = workflow_with_ids['workflow_id']
             logger.info(f"Saving workflow {workflow_id} to database")
-            self.state_manager.save_workflow(workflow_with_ids)
+            self.state_manager.save_workflow(workflow_dict)
             
             logger.info(
                 f"Workflow '{validated_workflow.workflow_name}' submitted "
-                f"successfully with ID: {workflow_id}"
+                f"successfully with ID: {workflow_id} (status=pending, waiting for executor)"
             )
             
             return {
                 'workflow_id': workflow_id,
-                'status': 'submitted'
+                'status': 'pending'
             }
             
         except ValueError as e:
@@ -110,6 +134,19 @@ class WorkflowManager:
         except Exception as e:
             logger.error(f"Workflow submission failed: {e}")
             raise
+    
+    @staticmethod
+    def _generate_workflow_id() -> str:
+        """Generate workflow ID locally.
+        
+        Returns:
+            Workflow ID string
+        """
+        import time
+        import random
+        timestamp = int(time.time() * 1000)
+        random_part = random.randint(1000, 9999)
+        return f"wf_{timestamp}_{random_part}"
     
     def get_workflow_status(self, workflow_id: str) -> WorkflowStatus:
         """Get status of a workflow.

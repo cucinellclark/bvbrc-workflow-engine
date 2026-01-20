@@ -219,6 +219,66 @@ async def submit_cwl_workflow(
         )
 
 
+@router.post(
+    "/workflows/{workflow_id}/cancel",
+    summary="Cancel a workflow",
+    description="Cancel a running or pending workflow. The executor will stop "
+                "submitting new steps and mark the workflow as cancelled."
+)
+async def cancel_workflow(workflow_id: str) -> Dict[str, Any]:
+    """Cancel a workflow.
+    
+    Args:
+        workflow_id: Workflow identifier
+        
+    Returns:
+        Cancellation confirmation
+        
+    Raises:
+        HTTPException: 404 if not found, 400 if already completed, 500 for errors
+    """
+    try:
+        logger.info(f"Received cancellation request for workflow {workflow_id}")
+        
+        # Get workflow
+        workflow = workflow_manager.get_full_workflow(workflow_id)
+        
+        current_status = workflow.get('status')
+        
+        # Check if workflow is already in terminal state
+        if current_status in ['succeeded', 'failed', 'cancelled']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot cancel workflow with status '{current_status}'"
+            )
+        
+        # Update status to cancelled
+        workflow_manager.update_workflow_status(workflow_id, 'cancelled')
+        
+        logger.info(f"Workflow {workflow_id} marked as cancelled")
+        
+        return {
+            "workflow_id": workflow_id,
+            "status": "cancelled",
+            "message": "Workflow cancellation requested. Executor will stop processing."
+        }
+        
+    except ValueError as e:
+        logger.error(f"Workflow not found: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling workflow: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
 @router.get(
     "/health",
     response_model=HealthResponse,

@@ -99,8 +99,19 @@ class Config:
     def logging(self) -> Dict[str, Any]:
         """Get logging configuration."""
         return self._config.get('logging', {})
+    
+    @property
+    def executor(self) -> Dict[str, Any]:
+        """Get executor configuration."""
+        return self._config.get('executor', {})
+    
+    @property
+    def metrics(self) -> Dict[str, Any]:
+        """Get metrics configuration."""
+        return self._config.get('metrics', {})
 
 
-# Global config instance
+# Global config instance - load immediately on import
 config = Config()
+config.load()
 

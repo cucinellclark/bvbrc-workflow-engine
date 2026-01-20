@@ -16,7 +16,21 @@ scheduler:
   url: https://p3.theseed.org/services/app_service
   timeout: 30
 
+# Workflow executor configuration
+executor:
+  polling_interval_seconds: 10
+  max_parallel_steps_per_workflow: 2
+  enable_auto_resume: true
+
 logging:
   level: INFO
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  workflow_log_dir: "logs/workflows"
+  executor_log_file: "logs/executor.log"
+  use_structured_logging: true
+
+# Metrics and observability
+metrics:
+  enable_prometheus: true
+  port: 9090
 

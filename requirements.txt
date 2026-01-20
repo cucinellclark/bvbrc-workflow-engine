@@ -1,3 +1,4 @@
+# Core dependencies
 fastapi==0.110.0
 uvicorn[standard]==0.27.0
 pymongo==4.6.1
@@ -6,3 +7,10 @@ pyyaml==6.0.1
 python-dotenv==1.0.0
 requests==2.31.0
 
+# NEW - DAG execution engine dependencies
+networkx>=3.0              # DAG management and graph algorithms
+apscheduler>=3.10.0        # Robust job scheduling
+structlog>=23.0.0          # Structured logging
+
+# NEW - Observability (recommended)
+prometheus-client>=0.19.0  # Metrics collection

@@ -2,10 +2,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from prometheus_client import make_asgi_app
 
 from api.routes import router, set_workflow_manager
 from core.workflow_manager import WorkflowManager
 from utils.logger import get_logger
+from config.config import config
 
 
 logger = get_logger(__name__)
@@ -57,6 +59,12 @@ app.add_middleware(
 # Include API routes
 app.include_router(router, prefix="/api/v1")
 
+# Mount Prometheus metrics endpoint if enabled
+if config.metrics.get('enable_prometheus', True):
+    metrics_app = make_asgi_app()
+    app.mount("/metrics", metrics_app)
+    logger.info("Prometheus metrics endpoint enabled at /metrics")
+
 
 @app.get("/")
 async def root():
@@ -64,6 +72,7 @@ async def root():
     return {
         "message": "Workflow Engine API",
         "version": "1.0.0",
-        "docs": "/docs"
+        "docs": "/docs",
+        "metrics": "/metrics" if config.metrics.get('enable_prometheus', True) else None
     }
 

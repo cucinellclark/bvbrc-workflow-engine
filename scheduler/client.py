@@ -1,7 +1,7 @@
 """Scheduler client for submitting jobs via JSON-RPC."""
 import time
 import random
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from utils.logger import get_logger
 from utils.jsonrpc_client import JSONRPCClient
@@ -28,6 +28,7 @@ class SchedulerClient:
         """
         self.scheduler_url = scheduler_url
         self.timeout = timeout
+        self.auth_token = auth_token  # Store auth token
         
         # Initialize JSON-RPC client if scheduler URL is provided
         self.jsonrpc_client: Optional[JSONRPCClient] = None
@@ -175,6 +176,146 @@ class SchedulerClient:
         )
         
         return mock_status
+    
+    def submit_job(
+        self,
+        app: str,
+        params: Dict[str, Any],
+        auth_token: Optional[str] = None
+    ) -> str:
+        """Submit a single job to the scheduler.
+        
+        This is used by the executor to submit individual workflow steps.
+        
+        Args:
+            app: Application name (e.g., "GenomeAssembly2", "GenomeAnnotation")
+            params: Job parameters
+            auth_token: Authorization token for this submission
+            
+        Returns:
+            Task ID assigned by scheduler (becomes step_id)
+            
+        Raises:
+            Exception: If submission fails
+        """
+        logger.info(f"Submitting job to app '{app}' with auth token")
+        
+        # Create a temporary JSON-RPC client with the provided auth token
+        if auth_token:
+            temp_client = JSONRPCClient(
+                base_url=self.scheduler_url,
+                timeout=self.timeout,
+                auth_token=auth_token
+            )
+            task_id = temp_client.submit_job(app=app, params=params)
+        elif self.jsonrpc_client:
+            task_id = self.jsonrpc_client.submit_job(app=app, params=params)
+        else:
+            raise ValueError("No scheduler URL configured")
+        
+        logger.info(f"Job submitted successfully to '{app}': task_id={task_id}")
+        return task_id
+    
+    def query_task_status(
+        self,
+        task_ids: List[str],
+        auth_token: Optional[str] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """Query scheduler for task status.
+        
+        Makes JSON-RPC call to AppService.query_tasks to check status of jobs.
+        
+        The JSON-RPC call format is:
+        {
+          "jsonrpc": "2.0",
+          "method": "AppService.query_tasks",
+          "params": [["task_id1", "task_id2", ...]],
+          "id": request_id
+        }
+        
+        Response format:
+        {
+          "jsonrpc": "2.0",
+          "result": [{
+            "task_id1": {
+              "status": "completed|running|failed",
+              "completed_time": "2025-12-11 17:47:38",
+              "elapsed_time": "00:04:33",
+              "id": "task_id1",
+              ...
+            },
+            "task_id2": {...}
+          }],
+          "id": request_id
+        }
+        
+        Args:
+            task_ids: List of task IDs to query
+            auth_token: Optional authorization token (overrides client's token)
+            
+        Returns:
+            Dictionary mapping task_id to status information
+            
+        Raises:
+            requests.exceptions.RequestException: If HTTP request fails
+            ValueError: If JSON-RPC response contains an error
+        """
+        if not task_ids:
+            logger.warning("query_task_status called with empty task_ids list")
+            return {}
+        
+        method = "AppService.query_tasks"
+        
+        # Note: params is nested array [[task_ids]]
+        rpc_params = [task_ids]
+        
+        # Use provided auth_token or fall back to client's token
+        token = auth_token or self.auth_token
+        
+        logger.debug(
+            f"Querying task status for {len(task_ids)} tasks:\n"
+            f"  Task IDs: {task_ids}\n"
+            f"  Auth token present: {bool(token)}"
+        )
+        
+        try:
+            # Create temporary client with this specific auth token if needed
+            if auth_token and auth_token != self.auth_token:
+                temp_client = JSONRPCClient(
+                    base_url=self.scheduler_url,
+                    timeout=self.timeout,
+                    auth_token=auth_token
+                )
+                result = temp_client.call(method, rpc_params)
+            elif self.jsonrpc_client:
+                result = self.jsonrpc_client.call(method, rpc_params)
+            else:
+                logger.warning("No JSON-RPC client available for query_task_status")
+                return {}
+            
+            # Parse response: result is a list with one dict containing task statuses
+            if isinstance(result, list) and len(result) > 0:
+                status_dict = result[0]
+                
+                if not isinstance(status_dict, dict):
+                    logger.error(f"Unexpected result format: {result}")
+                    raise ValueError(f"Expected dict in result list, got {type(status_dict)}")
+                
+                logger.debug(f"Received status for {len(status_dict)} tasks")
+                return status_dict
+            
+            elif isinstance(result, dict):
+                # Sometimes result might be the dict directly
+                logger.debug(f"Received status dict directly for {len(result)} tasks")
+                return result
+            
+            else:
+                logger.warning(f"Unexpected result format from query_tasks: {result}")
+                return {}
+        
+        except Exception as e:
+            logger.error(f"Error querying task status: {e}")
+            raise
     
     def cancel_workflow(self, workflow_id: str) -> bool:
         """Request workflow cancellation from scheduler.

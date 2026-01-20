@@ -21,7 +21,16 @@ class WorkflowStep(BaseModel):
     params: Dict[str, Any]
     outputs: Optional[Dict[str, str]] = None
     depends_on: Optional[List[str]] = None
-    step_id: Optional[str] = None  # Assigned by scheduler
+    step_id: Optional[str] = None  # Assigned by scheduler when job is submitted
+    
+    # Execution tracking fields
+    status: Optional[str] = "pending"
+    task_id: Optional[str] = None  # Scheduler task ID (same as step_id when submitted)
+    submitted_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    elapsed_time: Optional[str] = None
+    error_message: Optional[str] = None
     
     class Config:
         extra = "forbid"
@@ -47,6 +56,21 @@ class WorkflowDefinition(BaseModel):
         extra = "forbid"
 
 
+class ExecutionMetadata(BaseModel):
+    """Workflow execution tracking metadata."""
+    total_steps: int = 0
+    completed_steps: int = 0
+    running_steps: int = 0
+    failed_steps: int = 0
+    pending_steps: int = 0
+    currently_running_step_ids: List[str] = Field(default_factory=list)
+    completed_step_ids: List[str] = Field(default_factory=list)
+    max_parallel_steps: int = 2
+    
+    class Config:
+        extra = "allow"
+
+
 class WorkflowSubmission(BaseModel):
     """Workflow with scheduler-assigned IDs (stored format)."""
     workflow_id: str
@@ -55,9 +79,19 @@ class WorkflowSubmission(BaseModel):
     base_context: BaseContext
     steps: List[WorkflowStep]
     workflow_outputs: Optional[List[str]] = None
-    status: str = "submitted"
+    
+    # Status and timestamps
+    status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    
+    # Execution tracking
+    execution_metadata: Optional[ExecutionMetadata] = None
+    auth_token: Optional[str] = None  # Stored plaintext for now (TODO: encrypt)
+    log_file_path: Optional[str] = None
+    error_message: Optional[str] = None
     
     class Config:
         extra = "allow"
@@ -65,11 +99,24 @@ class WorkflowSubmission(BaseModel):
 
 class WorkflowStatusEnum(str, Enum):
     """Workflow status enumeration."""
-    SUBMITTED = "submitted"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    PENDING = "pending"          # Created but not yet picked up by executor
+    QUEUED = "queued"            # Picked up by executor, waiting to start
+    RUNNING = "running"          # Currently executing steps
+    SUCCEEDED = "succeeded"      # All steps completed successfully
+    FAILED = "failed"            # One or more steps failed
+    CANCELLED = "cancelled"      # User cancelled the workflow
+
+
+class StepStatusEnum(str, Enum):
+    """Step status enumeration."""
+    PENDING = "pending"          # Waiting for dependencies
+    READY = "ready"              # Dependencies met, ready to submit
+    QUEUED = "queued"            # Submitted to scheduler, waiting to start
+    RUNNING = "running"          # Currently executing
+    SUCCEEDED = "succeeded"      # Completed successfully
+    FAILED = "failed"            # Execution failed
+    SKIPPED = "skipped"          # Skipped (future use)
+    UPSTREAM_FAILED = "upstream_failed"  # Dependency failed
 
 
 class StepStatus(BaseModel):

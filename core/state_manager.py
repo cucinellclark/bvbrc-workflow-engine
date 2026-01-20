@@ -268,6 +268,345 @@ class StateManager:
             logger.error(f"Error listing workflows: {e}")
             raise
     
+    def get_active_workflows(self) -> List[Dict[str, Any]]:
+        """Get all workflows with status in ['pending', 'queued', 'running'].
+        
+        Returns:
+            List of active workflow documents
+        """
+        try:
+            query = {"status": {"$in": ["pending", "queued", "running"]}}
+            
+            workflows = list(
+                self.collection.find(
+                    query,
+                    {"_id": 0}
+                )
+                .sort("created_at", -1)
+            )
+            
+            logger.debug(f"Retrieved {len(workflows)} active workflows")
+            return workflows
+            
+        except Exception as e:
+            logger.error(f"Error retrieving active workflows: {e}")
+            raise
+    
+    def get_workflows_by_status(self, status: str) -> List[Dict[str, Any]]:
+        """Get workflows by status.
+        
+        Args:
+            status: Status to filter by
+            
+        Returns:
+            List of workflow documents
+        """
+        try:
+            workflows = list(
+                self.collection.find(
+                    {"status": status},
+                    {"_id": 0}
+                )
+                .sort("created_at", -1)
+            )
+            
+            logger.debug(f"Retrieved {len(workflows)} workflows with status={status}")
+            return workflows
+            
+        except Exception as e:
+            logger.error(f"Error retrieving workflows by status: {e}")
+            raise
+    
+    def update_step_fields(
+        self,
+        workflow_id: str,
+        step_id: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """Update multiple fields for a specific step.
+        
+        Args:
+            workflow_id: Workflow identifier
+            step_id: Step identifier
+            updates: Dictionary of fields to update
+            
+        Returns:
+            True if updated, False if not found
+        """
+        try:
+            logger.debug(
+                f"Updating step {step_id} in workflow {workflow_id}: {updates.keys()}"
+            )
+            
+            # Build update dict with $ positional operator
+            set_updates = {
+                f"steps.$.{key}": value
+                for key, value in updates.items()
+            }
+            set_updates["updated_at"] = datetime.utcnow()
+            
+            result = self.collection.update_one(
+                {
+                    "workflow_id": workflow_id,
+                    "steps.step_id": step_id
+                },
+                {"$set": set_updates}
+            )
+            
+            if result.matched_count == 0:
+                logger.warning(
+                    f"Step {step_id} in workflow {workflow_id} not found"
+                )
+                return False
+            
+            logger.debug(f"Step {step_id} fields updated successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating step {step_id} fields: {e}")
+            raise
+    
+    def update_step_by_name(
+        self,
+        workflow_id: str,
+        step_name: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """Update multiple fields for a step by step_name (before step_id assigned).
+        
+        Args:
+            workflow_id: Workflow identifier
+            step_name: Step name
+            updates: Dictionary of fields to update
+            
+        Returns:
+            True if updated, False if not found
+        """
+        try:
+            logger.debug(
+                f"Updating step '{step_name}' in workflow {workflow_id}: {updates.keys()}"
+            )
+            
+            # Build update dict with $ positional operator
+            set_updates = {
+                f"steps.$.{key}": value
+                for key, value in updates.items()
+            }
+            set_updates["updated_at"] = datetime.utcnow()
+            
+            result = self.collection.update_one(
+                {
+                    "workflow_id": workflow_id,
+                    "steps.step_name": step_name
+                },
+                {"$set": set_updates}
+            )
+            
+            if result.matched_count == 0:
+                logger.warning(
+                    f"Step '{step_name}' in workflow {workflow_id} not found"
+                )
+                return False
+            
+            logger.debug(f"Step '{step_name}' fields updated successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating step '{step_name}' fields: {e}")
+            raise
+    
+    def add_to_running_steps(
+        self,
+        workflow_id: str,
+        step_id: str
+    ) -> bool:
+        """Add step_id to currently_running_step_ids and increment counters.
+        
+        Args:
+            workflow_id: Workflow identifier
+            step_id: Step identifier to add
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            result = self.collection.update_one(
+                {"workflow_id": workflow_id},
+                {
+                    "$addToSet": {
+                        "execution_metadata.currently_running_step_ids": step_id
+                    },
+                    "$inc": {
+                        "execution_metadata.running_steps": 1
+                    },
+                    "$set": {
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            
+            if result.matched_count == 0:
+                logger.warning(f"Workflow {workflow_id} not found")
+                return False
+            
+            logger.debug(f"Added step {step_id} to running steps")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding to running steps: {e}")
+            raise
+    
+    def remove_from_running_steps(
+        self,
+        workflow_id: str,
+        step_id: str
+    ) -> bool:
+        """Remove step_id from currently_running_step_ids and decrement counter.
+        
+        Args:
+            workflow_id: Workflow identifier
+            step_id: Step identifier to remove
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            result = self.collection.update_one(
+                {"workflow_id": workflow_id},
+                {
+                    "$pull": {
+                        "execution_metadata.currently_running_step_ids": step_id
+                    },
+                    "$inc": {
+                        "execution_metadata.running_steps": -1
+                    },
+                    "$set": {
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            
+            if result.matched_count == 0:
+                logger.warning(f"Workflow {workflow_id} not found")
+                return False
+            
+            logger.debug(f"Removed step {step_id} from running steps")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error removing from running steps: {e}")
+            raise
+    
+    def add_to_completed_steps(
+        self,
+        workflow_id: str,
+        step_id: str
+    ) -> bool:
+        """Add step_id to completed_step_ids and increment counter.
+        
+        Args:
+            workflow_id: Workflow identifier
+            step_id: Step identifier to add
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            result = self.collection.update_one(
+                {"workflow_id": workflow_id},
+                {
+                    "$addToSet": {
+                        "execution_metadata.completed_step_ids": step_id
+                    },
+                    "$inc": {
+                        "execution_metadata.completed_steps": 1
+                    },
+                    "$set": {
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            
+            if result.matched_count == 0:
+                logger.warning(f"Workflow {workflow_id} not found")
+                return False
+            
+            logger.debug(f"Added step {step_id} to completed steps")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding to completed steps: {e}")
+            raise
+    
+    def update_workflow_fields(
+        self,
+        workflow_id: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """Update multiple workflow fields atomically.
+        
+        Args:
+            workflow_id: Workflow identifier
+            updates: Dictionary of fields to update
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            updates["updated_at"] = datetime.utcnow()
+            
+            result = self.collection.update_one(
+                {"workflow_id": workflow_id},
+                {"$set": updates}
+            )
+            
+            if result.matched_count == 0:
+                logger.warning(f"Workflow {workflow_id} not found")
+                return False
+            
+            logger.debug(f"Workflow {workflow_id} fields updated: {updates.keys()}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating workflow fields: {e}")
+            raise
+    
+    def increment_workflow_field(
+        self,
+        workflow_id: str,
+        field: str,
+        value: int = 1
+    ) -> bool:
+        """Increment a numeric workflow field.
+        
+        Args:
+            workflow_id: Workflow identifier
+            field: Field name to increment
+            value: Amount to increment (default 1)
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            result = self.collection.update_one(
+                {"workflow_id": workflow_id},
+                {
+                    "$inc": {field: value},
+                    "$set": {"updated_at": datetime.utcnow()}
+                }
+            )
+            
+            if result.matched_count == 0:
+                logger.warning(f"Workflow {workflow_id} not found")
+                return False
+            
+            logger.debug(f"Incremented {field} by {value} for workflow {workflow_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error incrementing workflow field: {e}")
+            raise
+    
     def close(self):
         """Close MongoDB connection."""
         if self.client:
