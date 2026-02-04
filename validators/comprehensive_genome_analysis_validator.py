@@ -277,6 +277,25 @@ class ComprehensiveGenomeAnalysisValidator(BaseStepValidator):
                     "(should start with '/' or be a variable reference)"
                 )
             
+            # Set input_type based on which input source is provided
+            # This is required by the ComprehensiveGenomeAnalysis app service
+            if not validated_params.get('input_type'):
+                srr_ids = validated_params.get('srr_ids')
+                paired_end_libs = validated_params.get('paired_end_libs')
+                single_end_libs = validated_params.get('single_end_libs')
+                
+                if srr_ids and (isinstance(srr_ids, list) and len(srr_ids) > 0):
+                    validated_params['input_type'] = 'srr_ids'
+                elif paired_end_libs and (isinstance(paired_end_libs, list) and len(paired_end_libs) > 0):
+                    validated_params['input_type'] = 'paired_end_libs'
+                elif single_end_libs and (isinstance(single_end_libs, list) and len(single_end_libs) > 0):
+                    validated_params['input_type'] = 'single_end_libs'
+                else:
+                    # This shouldn't happen if validation above worked, but set a default
+                    errors.append(
+                        "Cannot determine input_type: no valid input source provided"
+                    )
+            
             logger.debug(
                 f"ComprehensiveGenomeAnalysis: Validated {len(validated_params)} parameters"
             )

@@ -1,11 +1,12 @@
 """Workflow JSON validation and dependency checking."""
-from typing import Dict, List, Set, Any
+from typing import Dict, List, Set, Any, Optional
 import re
 
 from pydantic import ValidationError
 from models.workflow import WorkflowDefinition, WorkflowStep
 from utils.logger import get_logger
 from validators import get_defaults, get_validator
+from utils.output_file_checker import check_and_resolve_output_conflicts
 
 
 logger = get_logger(__name__)
@@ -15,11 +16,15 @@ class WorkflowValidator:
     """Validates workflow JSON and business logic."""
     
     @staticmethod
-    def validate_workflow_input(workflow_data: Dict[str, Any]) -> WorkflowDefinition:
+    def validate_workflow_input(
+        workflow_data: Dict[str, Any],
+        auth_token: Optional[str] = None
+    ) -> WorkflowDefinition:
         """Validate workflow input JSON.
         
         Args:
             workflow_data: Raw workflow dictionary
+            auth_token: Optional authentication token for workspace API calls
             
         Returns:
             Validated WorkflowDefinition object
@@ -50,6 +55,20 @@ class WorkflowValidator:
             # Apply service-specific defaults and validate steps
             # This modifies workflow_data and returns updated workflow
             workflow = WorkflowValidator._apply_step_validators(workflow_data, workflow)
+            
+            # Check and resolve output file conflicts
+            if auth_token:
+                logger.info("Checking for output file conflicts")
+                workflow_data = check_and_resolve_output_conflicts(
+                    workflow_data,
+                    auth_token
+                )
+                # Re-validate with updated workflow_data
+                workflow = WorkflowDefinition(**workflow_data)
+            else:
+                logger.info(
+                    "No auth token provided - skipping output file conflict check"
+                )
             
             # Additional business logic validation
             WorkflowValidator.validate_step_dependencies(workflow.steps)

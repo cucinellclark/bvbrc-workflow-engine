@@ -72,7 +72,8 @@ class WorkflowManager:
             # Step 2: Validate workflow
             logger.info("Validating workflow")
             validated_workflow = self.validator.validate_workflow_input(
-                resolved_workflow
+                resolved_workflow,
+                auth_token=auth_token
             )
             
             # Step 3: Generate workflow ID locally (no scheduler call yet)

@@ -355,6 +355,49 @@ executor:
   enable_auto_resume: true  # Default: true
 ```
 
+### Output File Conflict Detection
+
+Automatically check and resolve output file conflicts during workflow submission:
+
+**Environment Variables:**
+
+```bash
+# Enable/disable output file conflict checking (default: true)
+CHECK_OUTPUT_FILE_CONFLICTS=true
+
+# Maximum number of rename attempts when finding unique name (default: 100)
+MAX_OUTPUT_FILE_ATTEMPTS=100
+```
+
+**How it works:**
+
+When you submit a workflow, the system checks if any output files already exist in the workspace. If a conflict is detected, the output file name is automatically renamed with a numeric suffix:
+
+- `assembly_output` → `assembly_output_2`
+- `assembly_output_2` → `assembly_output_3`
+- etc.
+
+**Example:**
+
+```bash
+# First submission creates: /workspace/Assembly/assembly_output
+# Second submission auto-renames to: /workspace/Assembly/assembly_output_2
+# Third submission auto-renames to: /workspace/Assembly/assembly_output_3
+```
+
+**Requirements:**
+- Valid authentication token must be provided in the `Authorization` header
+- Steps must have both `output_path` and `output_file` parameters
+- Output path must be resolvable at submission time (base_context variables only)
+
+**Disabling:**
+
+To disable automatic conflict resolution:
+
+```bash
+export CHECK_OUTPUT_FILE_CONFLICTS=false
+```
+
 ## Development
 
 ### Project Structure
