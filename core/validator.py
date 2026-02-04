@@ -5,6 +5,7 @@ import re
 from pydantic import ValidationError
 from models.workflow import WorkflowDefinition, WorkflowStep
 from utils.logger import get_logger
+from validators import get_defaults, get_validator
 
 
 logger = get_logger(__name__)
@@ -45,6 +46,10 @@ class WorkflowValidator:
             # Validate using Pydantic model
             logger.info("Validating workflow schema")
             workflow = WorkflowDefinition(**workflow_data)
+            
+            # Apply service-specific defaults and validate steps
+            # This modifies workflow_data and returns updated workflow
+            workflow = WorkflowValidator._apply_step_validators(workflow_data, workflow)
             
             # Additional business logic validation
             WorkflowValidator.validate_step_dependencies(workflow.steps)
@@ -207,4 +212,116 @@ class WorkflowValidator:
                 check_string(output, f"workflow_outputs[{i}]")
         
         logger.debug("Variable references validated")
+    
+    @staticmethod
+    def _apply_step_validators(
+        workflow_data: Dict[str, Any],
+        workflow: WorkflowDefinition
+    ) -> WorkflowDefinition:
+        """Apply service-specific defaults and validators to workflow steps.
+        
+        This method:
+        1. Applies default parameters (non-destructive) using defaults providers
+        2. Validates step parameters and structure using validators
+        3. Updates step params with enriched/validated values
+        4. Returns a new WorkflowDefinition with updated steps
+        
+        Args:
+            workflow_data: Raw workflow dictionary (will be modified)
+            workflow: Current WorkflowDefinition object
+        
+        Returns:
+            New WorkflowDefinition with enriched and validated steps
+        
+        Raises:
+            ValueError: If validation fails for any step
+        """
+        logger.debug("Applying service-specific defaults and validators")
+        
+        validation_errors = []
+        validation_warnings = []
+        
+        for step_dict in workflow_data['steps']:
+            step_name = step_dict.get('step_name', 'unknown')
+            app_name = step_dict.get('app', '')
+            
+            if not app_name:
+                logger.warning(f"Step '{step_name}' has no app name, skipping")
+                continue
+            
+            try:
+                # Step 1: Apply defaults (if defaults provider exists)
+                defaults_provider = get_defaults(app_name)
+                if defaults_provider:
+                    logger.debug(
+                        f"Step '{step_name}': Applying defaults for app '{app_name}'"
+                    )
+                    step_dict['params'] = defaults_provider.apply_defaults(
+                        step_dict.get('params', {}),
+                        app_name
+                    )
+                else:
+                    logger.debug(
+                        f"Step '{step_name}': No defaults provider for app '{app_name}'"
+                    )
+                
+                # Step 2: Validate (if validator exists)
+                validator = get_validator(app_name)
+                if validator:
+                    logger.debug(
+                        f"Step '{step_name}': Validating for app '{app_name}'"
+                    )
+                    result = validator.validate_step(step_dict, app_name)
+                    
+                    # Check for errors
+                    if result.has_errors():
+                        for error in result.errors:
+                            validation_errors.append(
+                                f"Step '{step_name}' ({app_name}): {error}"
+                            )
+                    
+                    # Collect warnings
+                    if result.has_warnings():
+                        for warning in result.warnings:
+                            validation_warnings.append(
+                                f"Step '{step_name}' ({app_name}): {warning}"
+                            )
+                    
+                    # Update step params with validated params
+                    step_dict['params'] = result.params
+                    
+                    logger.debug(
+                        f"Step '{step_name}': Validation complete "
+                        f"({len(result.warnings)} warnings, {len(result.errors)} errors)"
+                    )
+                else:
+                    logger.debug(
+                        f"Step '{step_name}': No validator for app '{app_name}', "
+                        "skipping validation"
+                    )
+                
+            except Exception as e:
+                # Unexpected error during defaults/validation
+                error_msg = f"Step '{step_name}' ({app_name}): Unexpected error: {str(e)}"
+                validation_errors.append(error_msg)
+                logger.error(error_msg, exc_info=True)
+        
+        # Log warnings (non-critical)
+        if validation_warnings:
+            for warning in validation_warnings:
+                logger.warning(warning)
+        
+        # Raise exception if there are validation errors
+        if validation_errors:
+            error_summary = "\n".join(f"  - {err}" for err in validation_errors)
+            raise ValueError(
+                f"Step validation failed with {len(validation_errors)} error(s):\n{error_summary}"
+            )
+        
+        # Reconstruct workflow with updated steps
+        # Create new WorkflowDefinition from modified workflow_data
+        validated_workflow = WorkflowDefinition(**workflow_data)
+        
+        logger.debug("Service-specific defaults and validators applied successfully")
+        return validated_workflow
 

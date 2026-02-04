@@ -5,7 +5,7 @@ A production-ready workflow execution engine with DAG (Directed Acyclic Graph) s
 ## Features
 
 - **DAG-Based Execution**: Workflows are executed as directed acyclic graphs with automatic dependency resolution
-- **Parallel Execution**: Up to 2 steps per workflow can run in parallel (configurable)
+- **Parallel Execution**: Up to 3 steps per workflow can run in parallel (configurable)
 - **State Persistence**: All workflow state stored in MongoDB for reliability and resumability
 - **Resume Capability**: Executor automatically resumes workflows after restart
 - **Per-Workflow Logging**: Structured logs for each workflow execution
@@ -92,7 +92,7 @@ scheduler:
 
 executor:
   polling_interval_seconds: 10        # How often to poll (adjustable)
-  max_parallel_steps_per_workflow: 2  # Max parallel steps per workflow
+  max_parallel_steps_per_workflow: 3  # Max parallel steps per workflow
   enable_auto_resume: true             # Resume workflows on restart
 
 logging:
@@ -343,7 +343,7 @@ Control how many steps can run simultaneously per workflow:
 
 ```yaml
 executor:
-  max_parallel_steps_per_workflow: 2  # Default: 2
+  max_parallel_steps_per_workflow: 3  # Default: 3
 ```
 
 ### Auto-Resume

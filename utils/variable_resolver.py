@@ -424,64 +424,76 @@ class VariableResolver:
         step_params: Dict[str, Any],
         workflow_steps: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Dynamically resolve step output references in step parameters at runtime.
+        """Dynamically resolve step output and param references in step parameters at runtime.
         
         This is called right before submitting a step to the scheduler, to resolve
-        references to outputs from previously completed steps.
+        references to outputs and params from previously completed steps.
+        
+        Supports:
+        - ${steps.xxx.outputs.yyy} - references to step outputs
+        - ${steps.xxx.params.yyy} - references to step params
         
         Args:
-            step_params: Step parameters that may contain ${steps.xxx.outputs.yyy} references
-            workflow_steps: All workflow steps with their current state and outputs
+            step_params: Step parameters that may contain ${steps.xxx.outputs.yyy} or ${steps.xxx.params.yyy} references
+            workflow_steps: All workflow steps with their current state, outputs, and params
             
         Returns:
-            Parameters with step output references resolved to actual values
+            Parameters with step references resolved to actual values
         """
         # Build step outputs map from current workflow state
         step_outputs_map = {}
+        step_params_map = {}
         for step in workflow_steps:
             step_name = step.get('step_name')
-            outputs = step.get('outputs', {})
-            if step_name and outputs:
-                step_outputs_map[step_name] = outputs
+            if step_name:
+                outputs = step.get('outputs', {})
+                if outputs:
+                    step_outputs_map[step_name] = outputs
+                params = step.get('params', {})
+                if params:
+                    step_params_map[step_name] = params
         
         # Recursively resolve references in params
-        return VariableResolver._resolve_step_outputs_in_dict(
+        return VariableResolver._resolve_step_references_in_dict(
             step_params,
             step_outputs_map,
+            step_params_map,
             "step_params"
         )
     
     @staticmethod
-    def _resolve_step_outputs_in_dict(
+    def _resolve_step_references_in_dict(
         obj: Any,
         step_outputs_map: Dict[str, Dict[str, Any]],
+        step_params_map: Dict[str, Dict[str, Any]],
         context_path: str
     ) -> Any:
-        """Recursively resolve step output references in an object.
+        """Recursively resolve step output and param references in an object.
         
         Args:
             obj: Object to resolve
             step_outputs_map: Map of {step_name: {output_name: value}}
+            step_params_map: Map of {step_name: {param_name: value}}
             context_path: Path for error reporting
             
         Returns:
-            Object with step output references resolved
+            Object with step references resolved
         """
         if isinstance(obj, str):
-            return VariableResolver._resolve_step_outputs_in_string(
-                obj, step_outputs_map, context_path
+            return VariableResolver._resolve_step_references_in_string(
+                obj, step_outputs_map, step_params_map, context_path
             )
         elif isinstance(obj, dict):
             return {
-                key: VariableResolver._resolve_step_outputs_in_dict(
-                    value, step_outputs_map, f"{context_path}.{key}"
+                key: VariableResolver._resolve_step_references_in_dict(
+                    value, step_outputs_map, step_params_map, f"{context_path}.{key}"
                 )
                 for key, value in obj.items()
             }
         elif isinstance(obj, list):
             return [
-                VariableResolver._resolve_step_outputs_in_dict(
-                    item, step_outputs_map, f"{context_path}[{i}]"
+                VariableResolver._resolve_step_references_in_dict(
+                    item, step_outputs_map, step_params_map, f"{context_path}[{i}]"
                 )
                 for i, item in enumerate(obj)
             ]
@@ -489,22 +501,26 @@ class VariableResolver:
             return obj
     
     @staticmethod
-    def _resolve_step_outputs_in_string(
+    def _resolve_step_references_in_string(
         value: str,
         step_outputs_map: Dict[str, Dict[str, Any]],
+        step_params_map: Dict[str, Dict[str, Any]],
         context_path: str
     ) -> str:
-        """Resolve step output references in a string.
+        """Resolve step output and param references in a string.
         
-        Resolves ${steps.step_name.outputs.output_name} patterns.
+        Resolves:
+        - ${steps.step_name.outputs.output_name} patterns
+        - ${steps.step_name.params.param_name} patterns
         
         Args:
-            value: String potentially containing step output references
+            value: String potentially containing step references
             step_outputs_map: Map of {step_name: {output_name: value}}
+            step_params_map: Map of {step_name: {param_name: value}}
             context_path: Path for error reporting
             
         Returns:
-            String with step output references resolved
+            String with step references resolved
         """
         if not isinstance(value, str):
             return value
@@ -517,35 +533,62 @@ class VariableResolver:
         
         resolved = value
         for match in matches:
-            # Check if this is a step output reference: steps.step_name.outputs.output_name
-            if match.startswith('steps.') and '.outputs.' in match:
+            # Check if this is a step reference: steps.step_name.outputs.output_name or steps.step_name.params.param_name
+            if match.startswith('steps.'):
                 parts = match.split('.')
-                if len(parts) == 4 and parts[0] == 'steps' and parts[2] == 'outputs':
+                # Pattern: steps.step_name.outputs.output_name or steps.step_name.params.param_name
+                if len(parts) == 4 and parts[0] == 'steps':
                     step_name = parts[1]
-                    output_name = parts[3]
+                    ref_type = parts[2]  # 'outputs' or 'params'
+                    ref_name = parts[3]
                     
-                    # Look up the step
-                    if step_name not in step_outputs_map:
-                        logger.warning(
-                            f"Cannot resolve step reference '${{{match}}}' in {context_path}. "
-                            f"Step '{step_name}' outputs not available yet."
+                    if ref_type == 'outputs':
+                        # Look up the step outputs
+                        if step_name not in step_outputs_map:
+                            logger.warning(
+                                f"Cannot resolve step reference '${{{match}}}' in {context_path}. "
+                                f"Step '{step_name}' outputs not available yet."
+                            )
+                            continue  # Leave unresolved - step may not have run yet
+                        
+                        # Look up the output
+                        step_outputs = step_outputs_map[step_name]
+                        if ref_name not in step_outputs:
+                            logger.warning(
+                                f"Cannot resolve step reference '${{{match}}}' in {context_path}. "
+                                f"Output '{ref_name}' not found in step '{step_name}' outputs."
+                            )
+                            continue  # Leave unresolved
+                        
+                        resolved_value = str(step_outputs[ref_name])
+                        resolved = resolved.replace(f"${{{match}}}", resolved_value)
+                        logger.info(
+                            f"Runtime resolved {context_path}: ${{{match}}} -> {resolved_value}"
                         )
-                        continue  # Leave unresolved - step may not have run yet
                     
-                    # Look up the output
-                    step_outputs = step_outputs_map[step_name]
-                    if output_name not in step_outputs:
-                        logger.warning(
-                            f"Cannot resolve step reference '${{{match}}}' in {context_path}. "
-                            f"Output '{output_name}' not found in step '{step_name}' outputs."
+                    elif ref_type == 'params':
+                        # Look up the step params
+                        if step_name not in step_params_map:
+                            logger.warning(
+                                f"Cannot resolve step reference '${{{match}}}' in {context_path}. "
+                                f"Step '{step_name}' params not available."
+                            )
+                            continue  # Leave unresolved
+                        
+                        # Look up the param
+                        step_params = step_params_map[step_name]
+                        if ref_name not in step_params:
+                            logger.warning(
+                                f"Cannot resolve step reference '${{{match}}}' in {context_path}. "
+                                f"Param '{ref_name}' not found in step '{step_name}' params."
+                            )
+                            continue  # Leave unresolved
+                        
+                        resolved_value = str(step_params[ref_name])
+                        resolved = resolved.replace(f"${{{match}}}", resolved_value)
+                        logger.info(
+                            f"Runtime resolved {context_path}: ${{{match}}} -> {resolved_value}"
                         )
-                        continue  # Leave unresolved
-                    
-                    resolved_value = str(step_outputs[output_name])
-                    resolved = resolved.replace(f"${{{match}}}", resolved_value)
-                    logger.info(
-                        f"Runtime resolved {context_path}: ${{{match}}} -> {resolved_value}"
-                    )
         
         return resolved
 

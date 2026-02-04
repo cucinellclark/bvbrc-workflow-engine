@@ -14,3 +14,6 @@ structlog>=23.0.0          # Structured logging
 
 # NEW - Observability (recommended)
 prometheus-client>=0.19.0  # Metrics collection
+
+# BV-BRC Groups Module
+-e ../bvbrc_groups_module  # Local editable install

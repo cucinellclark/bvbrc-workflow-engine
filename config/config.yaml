@@ -19,7 +19,7 @@ scheduler:
 # Workflow executor configuration
 executor:
   polling_interval_seconds: 10
-  max_parallel_steps_per_workflow: 2
+  max_parallel_steps_per_workflow: 3
   enable_auto_resume: true
 
 logging:
@@ -27,6 +27,7 @@ logging:
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   workflow_log_dir: "logs/workflows"
   executor_log_file: "logs/executor.log"
+  scheduler_log_file: "logs/scheduler/scheduler.log"
   use_structured_logging: true
 
 # Metrics and observability

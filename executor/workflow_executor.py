@@ -9,6 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from core.state_manager import StateManager
 from scheduler.client import SchedulerClient
 from executor.workflow_context import WorkflowExecutionContext
+from executor.create_group_handler import CreateGroupHandler
 from utils.logger import get_logger
 from utils.workflow_logger import WorkflowLogger
 from utils.variable_resolver import VariableResolver
@@ -52,6 +53,9 @@ class WorkflowExecutor:
         
         # APScheduler instance
         self.scheduler = AsyncIOScheduler()
+        
+        # CreateGroup handler
+        self.create_group_handler = CreateGroupHandler(state_manager)
         
         # Configuration
         self.polling_interval = config.executor.get('polling_interval_seconds', 10)
@@ -396,6 +400,9 @@ class WorkflowExecutor:
     ) -> None:
         """Submit a single step to the scheduler.
         
+        Special handling for CreateGroup steps - these are executed directly
+        by the workflow engine, not submitted to the scheduler.
+        
         Args:
             ctx: Workflow execution context
             step: Step dictionary
@@ -404,6 +411,21 @@ class WorkflowExecutor:
         step_name = step.get('step_name')
         app = step.get('app')
         params = step.get('params', {})
+        
+        # Check if this is a CreateGroup step
+        if app == "CreateGroup":
+            logger.info(f"Workflow {workflow_id}: Executing CreateGroup step '{step_name}'")
+            await self.create_group_handler.handle_create_group_step(
+                workflow_id=workflow_id,
+                step=step,
+                auth_token=ctx.auth_token,
+                workflow_logger=ctx.workflow_logger,
+                dag=ctx.dag,
+                mark_step_running=ctx.mark_step_running,
+                mark_step_completed=ctx.mark_step_completed,
+                mark_step_failed=ctx.mark_step_failed
+            )
+            return
         
         logger.info(f"Workflow {workflow_id}: Submitting step '{step_name}' to app '{app}'")
         

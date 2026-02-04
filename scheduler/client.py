@@ -1,14 +1,21 @@
 """Scheduler client for submitting jobs via JSON-RPC."""
 import time
 import random
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from utils.logger import get_logger
+from utils.logger import get_logger, setup_logger
 from utils.jsonrpc_client import JSONRPCClient
 from models.workflow import WorkflowDefinition
 
 
-logger = get_logger(__name__)
+# Set up scheduler-specific logger with file logging
+logger = setup_logger(
+    'scheduler_client',
+    level='DEBUG',  # File level
+    log_file='logs/scheduler/scheduler.log',
+    console_level='INFO'  # Console level
+)
 
 
 class SchedulerClient:
@@ -272,11 +279,8 @@ class SchedulerClient:
         # Use provided auth_token or fall back to client's token
         token = auth_token or self.auth_token
         
-        logger.debug(
-            f"Querying task status for {len(task_ids)} tasks:\n"
-            f"  Task IDs: {task_ids}\n"
-            f"  Auth token present: {bool(token)}"
-        )
+        logger.info(f"Querying status for {len(task_ids)} tasks")
+        logger.debug(f"Task IDs: {task_ids}")
         
         try:
             # Create temporary client with this specific auth token if needed
@@ -301,12 +305,31 @@ class SchedulerClient:
                     logger.error(f"Unexpected result format: {result}")
                     raise ValueError(f"Expected dict in result list, got {type(status_dict)}")
                 
-                logger.debug(f"Received status for {len(status_dict)} tasks")
+                # Log summary of task statuses
+                status_summary = {}
+                for task_id, task_data in status_dict.items():
+                    status = task_data.get('status', 'unknown')
+                    status_summary[status] = status_summary.get(status, 0) + 1
+                
+                logger.info(
+                    f"Received status for {len(status_dict)} tasks - "
+                    f"Summary: {', '.join(f'{status}={count}' for status, count in status_summary.items())}"
+                )
+                logger.debug(f"Task status details: {status_dict}")
                 return status_dict
             
             elif isinstance(result, dict):
                 # Sometimes result might be the dict directly
-                logger.debug(f"Received status dict directly for {len(result)} tasks")
+                status_summary = {}
+                for task_id, task_data in result.items():
+                    status = task_data.get('status', 'unknown')
+                    status_summary[status] = status_summary.get(status, 0) + 1
+                
+                logger.info(
+                    f"Received status for {len(result)} tasks - "
+                    f"Summary: {', '.join(f'{status}={count}' for status, count in status_summary.items())}"
+                )
+                logger.debug(f"Task status details: {result}")
                 return result
             
             else:

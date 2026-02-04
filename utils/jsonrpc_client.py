@@ -79,11 +79,12 @@ class JSONRPCClient:
             headers['Authorization'] = self.auth_token
         
         try:
-            # Log the full request payload for debugging
-            logger.info(
-                f"Sending JSON-RPC request to {self.base_url}:\n"
-                f"  Method: {method}\n"
-                f"  Request ID: {request_id}\n"
+            # Log request summary
+            logger.info(f"JSON-RPC request: method={method}, request_id={request_id}")
+            
+            # Log the full request payload at DEBUG level
+            logger.debug(
+                f"Full JSON-RPC request to {self.base_url}:\n"
                 f"  Payload: {json.dumps(payload, indent=2)}"
             )
             
@@ -121,10 +122,10 @@ class JSONRPCClient:
                 )
                 raise ValueError(f"Invalid JSON response: {e}")
             
-            # Log the full JSON-RPC response envelope
-            logger.info(
-                f"Received JSON-RPC response:\n"
-                f"  Full response: {json.dumps(result, indent=2)}"
+            # Log the full JSON-RPC response envelope at DEBUG level
+            logger.debug(
+                f"Full JSON-RPC response:\n"
+                f"  Response: {json.dumps(result, indent=2)}"
             )
             
             # Check for JSON-RPC error
@@ -143,10 +144,7 @@ class JSONRPCClient:
             
             # Return result
             if "result" in result:
-                logger.info(
-                    f"JSON-RPC call successful: method={method}, "
-                    f"request_id={request_id}"
-                )
+                logger.info(f"JSON-RPC call successful: method={method}")
                 return result["result"]
             else:
                 logger.warning(
@@ -208,8 +206,11 @@ class JSONRPCClient:
         # Construct params array: [app_name, step_params, {}]
         rpc_params = [app, params, {}]
         
-        logger.info(
-            f"Submitting job to app '{app}':\n"
+        logger.info(f"Submitting job to app '{app}'")
+        
+        # Log full params at DEBUG level
+        logger.debug(
+            f"Job submission details:\n"
             f"  Method: {method}\n"
             f"  App: {app}\n"
             f"  Params: {json.dumps(params, indent=2)}\n"
@@ -219,11 +220,11 @@ class JSONRPCClient:
         # Make JSON-RPC call
         result = self.call(method, rpc_params)
         
-        # Log the actual result for debugging
-        logger.info(
-            f"Received result from {method}:\n"
-            f"  Result type: {type(result)}\n"
-            f"  Result value: {json.dumps(result, indent=2) if isinstance(result, (dict, list)) else result}"
+        # Log the actual result at DEBUG level
+        logger.debug(
+            f"Result from {method}:\n"
+            f"  Type: {type(result)}\n"
+            f"  Value: {json.dumps(result, indent=2) if isinstance(result, (dict, list)) else result}"
         )
         
         # Handle response format: BV-BRC returns a list with one dict
@@ -264,11 +265,14 @@ class JSONRPCClient:
                 f"Task info: {task_info}"
             )
         
-        # Log successful submission with key task details
+        # Log successful submission summary
+        logger.info(f"Job submitted successfully to '{app}': task_id={task_id}")
+        
+        # Log details at DEBUG level
         state_code = task_info.get('state_code', 'unknown')
         owner = task_info.get('owner', 'unknown')
-        logger.info(
-            f"Job submitted successfully to app '{app}':\n"
+        logger.debug(
+            f"Job submission details:\n"
             f"  Task ID: {task_id}\n"
             f"  State: {state_code}\n"
             f"  Owner: {owner}\n"

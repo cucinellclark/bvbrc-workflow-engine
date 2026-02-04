@@ -65,7 +65,7 @@ class ExecutionMetadata(BaseModel):
     pending_steps: int = 0
     currently_running_step_ids: List[str] = Field(default_factory=list)
     completed_step_ids: List[str] = Field(default_factory=list)
-    max_parallel_steps: int = 2
+    max_parallel_steps: int = 3
     
     class Config:
         extra = "allow"

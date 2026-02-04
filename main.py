@@ -54,13 +54,22 @@ def main():
         print(f"Error loading configuration: {e}", file=sys.stderr)
         sys.exit(1)
     
-    # Setup logging
+    # Setup logging with file handler
     log_level = args.log_level or config.get('logging.level', 'INFO')
     log_format = config.get(
         'logging.format',
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    logger = setup_logger('workflow_engine', log_level, log_format)
+    executor_log_file = config.get('logging.executor_log_file', 'logs/executor.log')
+    
+    # Set console to INFO, file to DEBUG for detailed logging
+    logger = setup_logger(
+        'workflow_engine',
+        level='DEBUG',  # File level
+        log_format=log_format,
+        log_file=executor_log_file,
+        console_level=log_level  # Console level
+    )
     
     logger.info("=" * 60)
     logger.info("Workflow Engine Executor")

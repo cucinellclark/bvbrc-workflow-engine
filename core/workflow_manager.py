@@ -99,6 +99,7 @@ class WorkflowManager:
             
             # Initialize execution metadata
             from models.workflow import ExecutionMetadata
+            max_parallel = config.executor.get('max_parallel_steps_per_workflow', 3)
             workflow_dict['execution_metadata'] = ExecutionMetadata(
                 total_steps=len(workflow_dict['steps']),
                 completed_steps=0,
@@ -107,7 +108,7 @@ class WorkflowManager:
                 pending_steps=len(workflow_dict['steps']),
                 currently_running_step_ids=[],
                 completed_step_ids=[],
-                max_parallel_steps=2  # Global constant
+                max_parallel_steps=max_parallel
             ).model_dump()
             
             # Set log file path

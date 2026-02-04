@@ -32,7 +32,7 @@ class WorkflowExecutionContext:
     failed_steps: Set[str] = field(default_factory=set)
     
     # Configuration
-    max_parallel_steps: int = 2
+    max_parallel_steps: int = 3
     
     # Logging
     workflow_logger: Optional[logging.Logger] = None
@@ -92,7 +92,7 @@ class WorkflowExecutionContext:
         
         # Get max parallel steps from execution metadata
         exec_meta = workflow_doc.get('execution_metadata', {})
-        max_parallel = exec_meta.get('max_parallel_steps', 2)
+        max_parallel = exec_meta.get('max_parallel_steps', 3)
         
         return cls(
             workflow_id=workflow_id,
