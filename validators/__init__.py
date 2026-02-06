@@ -50,6 +50,20 @@ except ImportError:
     # Validator not available, skip registration
     pass
 
+try:
+    from .taxonomic_classification_validator import TaxonomicClassificationValidator
+    register_validator("TaxonomicClassification", TaxonomicClassificationValidator)
+except ImportError:
+    # Validator not available, skip registration
+    pass
+
+try:
+    from .similar_genome_finder_validator import SimilarGenomeFinderValidator
+    register_validator("SimilarGenomeFinder", SimilarGenomeFinderValidator)
+except ImportError:
+    # Validator not available, skip registration
+    pass
+
 __all__ = [
     # Defaults
     "BaseDefaults",

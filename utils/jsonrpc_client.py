@@ -1,6 +1,7 @@
 """JSON-RPC client for submitting jobs to scheduler apps."""
 import json
 import uuid
+import time
 from typing import Dict, Any, Optional, Union, List
 import requests
 from utils.logger import get_logger
@@ -22,8 +23,48 @@ class JSONRPCClient:
         """
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
-        self.auth_token = auth_token
+        self.auth_token = self._normalize_auth_token(auth_token)
         logger.debug(f"JSON-RPC client initialized: base_url={base_url}, timeout={timeout}")
+
+    @staticmethod
+    def _normalize_auth_token(auth_token: Optional[str]) -> Optional[str]:
+        """Normalize Authorization header value.
+
+        BV-BRC/P3 services expect the raw token string (e.g. "un=username|..."),
+        not an OAuth2-style "Bearer <token>" wrapper.
+        """
+        if not auth_token:
+            return None
+
+        token = str(auth_token).strip()
+        # Common client pattern (Swagger/UIs) is to send "Bearer <token>".
+        # BV-BRC services want the raw token.
+        lower = token.lower()
+        if lower.startswith("bearer "):
+            token = token[7:].strip()
+        return token or None
+
+    @staticmethod
+    def _mask_auth_value(value: Optional[str]) -> str:
+        """Mask sensitive header values for safe logging."""
+        if not value:
+            return "<none>"
+        s = str(value)
+        if len(s) <= 12:
+            return "<redacted>"
+        # Show a tiny prefix to correlate tokens across logs without leaking secrets.
+        return f"{s[:6]}…<redacted>…{s[-4:]}"
+
+    @staticmethod
+    def _safe_json_loads(text: str) -> Optional[Dict[str, Any]]:
+        """Best-effort JSON parsing for debugging error responses."""
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else {"_non_dict_json": parsed}
+        except Exception:
+            return None
     
     def call(
         self,
@@ -69,37 +110,76 @@ class JSONRPCClient:
             f"request_id={request_id}, {params_info}"
         )
 
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
+        # BV-BRC/P3 JSON-RPC services commonly use this media type.
+        # Some endpoints are picky about it, so keep it consistent.
+        headers = {"Content-Type": "application/jsonrpc+json", "Accept": "application/json"}
         
         # Add authorization header if token is provided
         if self.auth_token:
             headers['Authorization'] = self.auth_token
+        # Log header summary (masked) at DEBUG level
+        logger.debug(
+            "JSON-RPC request headers summary: "
+            f"Content-Type={headers.get('Content-Type')}, "
+            f"Accept={headers.get('Accept')}, "
+            f"Authorization={self._mask_auth_value(headers.get('Authorization'))}"
+        )
         
         try:
             # Log request summary
             logger.info(f"JSON-RPC request: method={method}, request_id={request_id}")
             
-            # Log the full request payload at DEBUG level
+            # Log the full request payload at INFO level for debugging
+            logger.info(
+                f"Full JSON-RPC request payload being sent to {self.base_url}:\n"
+                f"  Payload: {json.dumps(payload, indent=2)}"
+            )
+            
+            # Also log at DEBUG level
             logger.debug(
                 f"Full JSON-RPC request to {self.base_url}:\n"
                 f"  Payload: {json.dumps(payload, indent=2)}"
             )
             
+            start_time = time.time()
+            # Use explicit JSON serialization so Content-Type stays jsonrpc+json
             response = requests.post(
                 self.base_url,
-                json=payload,
+                data=json.dumps(payload),
                 headers=headers,
                 timeout=self.timeout
             )
+            elapsed_ms = int((time.time() - start_time) * 1000)
             
             # Log response status
-            logger.debug(f"Response status: {response.status_code}")
+            logger.debug(
+                f"Response status: {response.status_code} (elapsed={elapsed_ms}ms, "
+                f"content_type={response.headers.get('Content-Type')}, "
+                f"content_length={response.headers.get('Content-Length')})"
+            )
             
             # Try to get response body for error reporting
             response_text = response.text
+            response_json = self._safe_json_loads(response_text)
+
+            # Log response headers at DEBUG (can help identify upstream proxies / trace IDs)
+            try:
+                logger.debug(f"Response headers: {dict(response.headers)}")
+            except Exception:
+                pass
+
+            # If we received a JSON-RPC error envelope, log it clearly even if HTTP is 500.
+            if isinstance(response_json, dict) and "error" in response_json:
+                err = response_json.get("error") or {}
+                logger.error(
+                    "JSON-RPC error envelope received:\n"
+                    f"  HTTP status: {response.status_code}\n"
+                    f"  RPC method: {method}\n"
+                    f"  RPC id: {response_json.get('id', request_id)}\n"
+                    f"  Error code: {err.get('code')}\n"
+                    f"  Error message: {err.get('message')}\n"
+                    f"  Error data: {json.dumps(err.get('data'), indent=2) if err.get('data') is not None else '<none>'}"
+                )
             
             # Check HTTP status code
             if not response.ok:
@@ -109,6 +189,16 @@ class JSONRPCClient:
                     f"  Request params: {json.dumps(params, indent=2)}\n"
                     f"  Response body: {response_text}"
                 )
+                # If this was a JSON-RPC error envelope, raise a ValueError with the RPC error
+                # instead of a generic HTTPError so callers see the real server-side message.
+                if isinstance(response_json, dict) and "error" in response_json:
+                    error = response_json["error"] or {}
+                    raise ValueError(
+                        "JSON-RPC error (HTTP "
+                        f"{response.status_code}) from {method}: "
+                        f"code={error.get('code')}, message={error.get('message')}, "
+                        f"data={error.get('data')!r}"
+                    )
                 response.raise_for_status()
             
             # Parse JSON-RPC response
@@ -178,14 +268,14 @@ class JSONRPCClient:
     ) -> str:
         """Submit a job to a specific app via JSON-RPC.
         
-        This is a convenience method that calls AppService.submit2
+        This is a convenience method that calls AppService.start_app2
         with the app name and parameters, then extracts the task_id from the response.
         
         The JSON-RPC call format is:
         {
           "jsonrpc": "2.0",
-          "method": "AppService.submit2",
-          "params": [app_name, step_params, {}],
+          "method": "AppService.start_app2",
+          "params": [app_name, step_params, { 'base_url': 'https://www.bv-brc.org' }],
           "id": request_id
         }
         
@@ -200,20 +290,40 @@ class JSONRPCClient:
             requests.exceptions.RequestException: If HTTP request fails
             ValueError: If JSON-RPC response contains an error or missing task_id
         """
-        # Use AppService.start_app2 method with params as array: [app_name, step_params, {}]
+        # Use AppService.start_app2 method with params as array: [app_name, step_params, { 'base_url': '...' }]
         method = "AppService.start_app2"
         
-        # Construct params array: [app_name, step_params, {}]
-        rpc_params = [app, params, {}]
+        # Construct params array: [app_name, step_params, { 'base_url': 'https://www.bv-brc.org' }]
+        rpc_params = [app, params, { 'base_url': 'https://www.bv-brc.org' }]
+
+        # Heuristic warning: BV-BRC app IDs are commonly TitleCase (e.g. TaxonomicClassification).
+        # Snake_case (e.g. taxonomic_classification) often indicates the *service name* rather than app_id.
+        if isinstance(app, str) and ("_" in app or app.islower()):
+            logger.warning(
+                f"AppService.start_app2 called with suspicious app id '{app}'. "
+                "BV-BRC app ids are typically TitleCase (example: 'TaxonomicClassification'). "
+                "If submission fails with a vague server error, double-check this value."
+            )
         
         logger.info(f"Submitting job to app '{app}'")
         
-        # Log full params at DEBUG level
+        # Log full job spec at INFO level for debugging
+        logger.info(
+            f"Full job spec being sent to workflow engine (JSON-RPC):\n"
+            f"  Method: {method}\n"
+            f"  App: {app}\n"
+            f"  Params: {json.dumps(params, indent=2)}\n"
+            f"  Base URL: https://www.bv-brc.org\n"
+            f"  Auth token present: {bool(self.auth_token)}"
+        )
+        
+        # Also log at DEBUG level with additional details
         logger.debug(
             f"Job submission details:\n"
             f"  Method: {method}\n"
             f"  App: {app}\n"
             f"  Params: {json.dumps(params, indent=2)}\n"
+            f"  Base URL: https://www.bv-brc.org\n"
             f"  Auth token present: {bool(self.auth_token)}"
         )
         

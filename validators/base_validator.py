@@ -21,10 +21,16 @@ class ValidationResult:
         params: Validated parameters dictionary
         warnings: List of non-critical validation warnings
         errors: List of critical validation errors (if non-empty, should raise exception)
+        status: Validation status - "success" if no errors, "failure" if errors exist
     """
     params: Dict[str, Any]
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    
+    @property
+    def status(self) -> str:
+        """Get validation status: 'success' if no errors, 'failure' if errors exist."""
+        return "success" if len(self.errors) == 0 else "failure"
     
     def has_errors(self) -> bool:
         """Check if validation result contains errors."""

@@ -1,4 +1,5 @@
 """Scheduler client for submitting jobs via JSON-RPC."""
+import json
 import time
 import random
 from pathlib import Path
@@ -206,6 +207,14 @@ class SchedulerClient:
             Exception: If submission fails
         """
         logger.info(f"Submitting job to app '{app}' with auth token")
+        
+        # Log the full job spec being sent
+        logger.info(
+            f"Full job spec being sent to scheduler:\n"
+            f"  App: {app}\n"
+            f"  Params: {json.dumps(params, indent=2)}\n"
+            f"  Auth token present: {bool(auth_token)}"
+        )
         
         # Create a temporary JSON-RPC client with the provided auth token
         if auth_token:

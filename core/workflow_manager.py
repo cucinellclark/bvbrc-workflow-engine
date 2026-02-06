@@ -1,4 +1,5 @@
 """Workflow manager - orchestrates workflow submission and status queries."""
+import json
 from typing import Dict, Any
 from datetime import datetime
 
@@ -63,10 +64,20 @@ class WorkflowManager:
         try:
             logger.info("Starting workflow submission")
             
+            # Log the raw incoming workflow JSON
+            logger.info(
+                f"Raw workflow JSON received:\n{json.dumps(workflow_json, indent=2)}"
+            )
+            
             # Step 1: Resolve variable placeholders
             logger.info("Resolving variable placeholders")
             resolved_workflow = VariableResolver.resolve_workflow_variables(
                 workflow_json
+            )
+            
+            # Log the resolved workflow
+            logger.info(
+                f"Resolved workflow after variable resolution:\n{json.dumps(resolved_workflow, indent=2)}"
             )
             
             # Step 2: Validate workflow
@@ -74,6 +85,12 @@ class WorkflowManager:
             validated_workflow = self.validator.validate_workflow_input(
                 resolved_workflow,
                 auth_token=auth_token
+            )
+            
+            # Log the validated workflow
+            workflow_dict_before_id = validated_workflow.model_dump()
+            logger.info(
+                f"Validated workflow before adding workflow_id:\n{json.dumps(workflow_dict_before_id, indent=2)}"
             )
             
             # Step 3: Generate workflow ID locally (no scheduler call yet)

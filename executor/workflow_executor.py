@@ -1,5 +1,6 @@
 """Workflow executor - orchestrates DAG-based workflow execution."""
 import asyncio
+import json
 import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
@@ -429,6 +430,13 @@ class WorkflowExecutor:
         
         logger.info(f"Workflow {workflow_id}: Submitting step '{step_name}' to app '{app}'")
         
+        # Log the step details before resolution
+        logger.info(
+            f"Workflow {workflow_id}: Step '{step_name}' details before runtime resolution:\n"
+            f"  App: {app}\n"
+            f"  Params: {json.dumps(params, indent=2)}"
+        )
+        
         try:
             # IMPORTANT: Resolve step output references in params before submission
             # Get current workflow state from MongoDB to get latest step outputs
@@ -439,9 +447,18 @@ class WorkflowExecutor:
                     params,
                     workflow_steps
                 )
-                logger.debug(
-                    f"Workflow {workflow_id}: Resolved params for step '{step_name}'"
+                logger.info(
+                    f"Workflow {workflow_id}: Resolved params for step '{step_name}' after runtime resolution:\n"
+                    f"  Params: {json.dumps(params, indent=2)}"
                 )
+            
+            # Log the full job spec being sent to scheduler
+            logger.info(
+                f"Workflow {workflow_id}: Full job spec being sent to scheduler for step '{step_name}':\n"
+                f"  App: {app}\n"
+                f"  Params: {json.dumps(params, indent=2)}\n"
+                f"  Auth token present: {bool(ctx.auth_token)}"
+            )
             
             # Submit to scheduler
             task_id = self.scheduler_client.submit_job(

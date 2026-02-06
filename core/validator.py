@@ -14,6 +14,43 @@ logger = get_logger(__name__)
 
 class WorkflowValidator:
     """Validates workflow JSON and business logic."""
+
+    @staticmethod
+    def _normalize_step_app_name(app_name: str) -> str:
+        """Normalize step.app values into BV-BRC AppService app IDs when possible.
+
+        In practice we sometimes receive service-style snake_case names
+        (e.g. "taxonomic_classification") instead of AppService IDs
+        (e.g. "TaxonomicClassification"). If we can confidently map/convert
+        to a registered validator/defaults target, do so.
+        """
+        if not app_name or not isinstance(app_name, str):
+            return app_name
+
+        # If it already matches a registered validator/defaults, keep it.
+        if get_validator(app_name) or get_defaults(app_name):
+            return app_name
+
+        # Known aliases (most common cases we support in this codebase).
+        known_aliases = {
+            "genome_annotation": "GenomeAnnotation",
+            "comprehensive_genome_analysis": "ComprehensiveGenomeAnalysis",
+            "taxonomic_classification": "TaxonomicClassification",
+            "similar_genome_finder": "SimilarGenomeFinder",
+        }
+        if app_name in known_aliases:
+            candidate = known_aliases[app_name]
+            if get_validator(candidate) or get_defaults(candidate):
+                return candidate
+
+        # Conservative snake_case -> TitleCase conversion, but ONLY if it maps
+        # to a registered validator/defaults target.
+        if "_" in app_name:
+            candidate = "".join(part[:1].upper() + part[1:] for part in app_name.split("_") if part)
+            if candidate and (get_validator(candidate) or get_defaults(candidate)):
+                return candidate
+
+        return app_name
     
     @staticmethod
     def validate_workflow_input(
@@ -262,7 +299,13 @@ class WorkflowValidator:
         
         for step_dict in workflow_data['steps']:
             step_name = step_dict.get('step_name', 'unknown')
-            app_name = step_dict.get('app', '')
+            original_app_name = step_dict.get('app', '')
+            app_name = WorkflowValidator._normalize_step_app_name(original_app_name)
+            if app_name != original_app_name:
+                logger.info(
+                    f"Step '{step_name}': Normalized app name '{original_app_name}' -> '{app_name}'"
+                )
+                step_dict['app'] = app_name
             
             if not app_name:
                 logger.warning(f"Step '{step_name}' has no app name, skipping")

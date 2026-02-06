@@ -1,4 +1,5 @@
 """API route handlers."""
+import json
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, status, Header
 from pydantic import BaseModel
@@ -63,6 +64,11 @@ async def submit_workflow(
     """
     try:
         logger.info("Received workflow submission request")
+        
+        # Log the full incoming workflow data for debugging
+        logger.info(
+            f"Full workflow submission data:\n{json.dumps(workflow_data, indent=2)}"
+        )
         
         # Extract auth token from Authorization header if provided
         auth_token = authorization
