@@ -11,8 +11,14 @@ if [ -d "workflow_venv" ]; then
     source workflow_venv/bin/activate
 fi
 
-# Start API server
-echo "Starting uvicorn on port 8000..."
-uvicorn api.server:app --host 0.0.0.0 --port 8000
+# Start API server using main.py
+# Use environment variables if set, otherwise use config defaults
+if [ -n "$API_HOST" ] && [ -n "$API_PORT" ]; then
+    echo "Starting API server on $API_HOST:$API_PORT..."
+    python main.py --host "$API_HOST" --port "$API_PORT"
+else
+    echo "Starting API server (using config defaults)..."
+    python main.py
+fi
 
 

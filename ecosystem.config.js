@@ -1,13 +1,24 @@
+// Port configuration
+const API_HOST = '140.221.78.67';
+const API_PORT = 12007;
+const METRICS_PORT = 9090;
+
+// Base paths
+const BASE_DIR = '/home/ac.cucinell/bvbrc-dev/WorkflowEngineDev/workflow_engine';
+
 module.exports = {
   apps: [
     {
       name: 'workflow-engine-api',
-      script: 'main.py',
-      interpreter: './workflow_venv/bin/python3',
-      cwd: '/home/ac.cucinell/bvbrc-dev/WorkflowEngineDev/workflow_engine',
+      script: './scripts/start_api.sh',
+      interpreter: 'bash',
+      cwd: BASE_DIR,
       env: {
-        PYTHONPATH: '/home/ac.cucinell/bvbrc-dev/WorkflowEngineDev/workflow_engine',
-        PYTHONUNBUFFERED: '1'
+        PYTHONPATH: BASE_DIR,
+        PYTHONUNBUFFERED: '1',
+        API_HOST: API_HOST,
+        API_PORT: API_PORT,
+        METRICS_PORT: METRICS_PORT
       },
       instances: 1,
       exec_mode: 'fork',
@@ -26,13 +37,13 @@ module.exports = {
     },
     {
       name: 'workflow-engine-executor',
-      script: '-m',
-      args: 'executor.main',
-      interpreter: './workflow_venv/bin/python3',
-      cwd: '/home/ac.cucinell/bvbrc-dev/WorkflowEngineDev/workflow_engine',
+      script: './scripts/start_executor.sh',
+      interpreter: 'bash',
+      cwd: BASE_DIR,
       env: {
-        PYTHONPATH: '/home/ac.cucinell/bvbrc-dev/WorkflowEngineDev/workflow_engine',
-        PYTHONUNBUFFERED: '1'
+        PYTHONPATH: BASE_DIR,
+        PYTHONUNBUFFERED: '1',
+        METRICS_PORT: METRICS_PORT
       },
       instances: 1,
       exec_mode: 'fork',
