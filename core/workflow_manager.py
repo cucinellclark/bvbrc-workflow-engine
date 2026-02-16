@@ -153,6 +153,71 @@ class WorkflowManager:
         except Exception as e:
             logger.error(f"Workflow submission failed: {e}")
             raise
+
+    def validate_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, Any]:
+        """Validate a workflow without submission side effects.
+
+        This runs the same compile/validation pipeline used by submission:
+        1. Resolve variable placeholders
+        2. Validate workflow schema and business rules
+        3. Apply service defaults/normalization
+
+        Unlike submit_workflow(), this method does NOT:
+        - assign workflow_id
+        - persist to MongoDB
+        - mutate execution state
+
+        Args:
+            workflow_json: Raw workflow JSON dictionary
+            auth_token: Optional authorization token for workspace-dependent checks
+
+        Returns:
+            Dictionary with validated workflow and validation metadata
+
+        Raises:
+            ValueError: If variable resolution or validation fails
+            Exception: If validation pipeline fails unexpectedly
+        """
+        try:
+            logger.info("Starting workflow validation (no submission)")
+
+            # Keep immutable copies for reporting.
+            original_workflow = json.loads(json.dumps(workflow_json))
+
+            # Step 1: Resolve variable placeholders.
+            logger.info("Resolving variable placeholders for validation")
+            resolved_workflow = VariableResolver.resolve_workflow_variables(workflow_json)
+
+            # Step 2: Validate workflow and apply service-level normalization/defaults.
+            logger.info("Validating workflow")
+            validated_workflow = self.validator.validate_workflow_input(
+                resolved_workflow,
+                auth_token=auth_token
+            )
+            validated_dict = validated_workflow.model_dump()
+
+            # Surface coarse-grained auto-fix metadata so callers can explain
+            # what changed during compile/validation.
+            auto_fixes = []
+            if original_workflow != resolved_workflow:
+                auto_fixes.append("Resolved template variables from base_context/step outputs")
+            if resolved_workflow != validated_dict:
+                auto_fixes.append("Applied service defaults/normalization during validation")
+
+            return {
+                "valid": True,
+                "workflow_json": validated_dict,
+                "warnings": [],
+                "auto_fixes": auto_fixes,
+                "message": "Workflow validated successfully"
+            }
+
+        except ValueError as e:
+            logger.error(f"Workflow validation failed: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Workflow validation pipeline failed: {e}")
+            raise
     
     @staticmethod
     def _generate_workflow_id() -> str:

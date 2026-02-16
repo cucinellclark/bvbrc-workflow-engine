@@ -2,7 +2,7 @@
 import json
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, status, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.workflow_manager import WorkflowManager
 from models.workflow import WorkflowStatus
@@ -34,6 +34,15 @@ class HealthResponse(BaseModel):
     status: str
     mongodb: str
     version: str = "1.0.0"
+
+
+class ValidateResponse(BaseModel):
+    """Response model for workflow validation."""
+    valid: bool = True
+    workflow_json: Dict[str, Any]
+    warnings: list[str] = Field(default_factory=list)
+    auto_fixes: list[str] = Field(default_factory=list)
+    message: str = "Workflow validated successfully"
 
 
 @router.post(
@@ -88,6 +97,62 @@ async def submit_workflow(
         )
     except Exception as e:
         logger.error(f"Workflow submission failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@router.post(
+    "/workflows/validate",
+    response_model=ValidateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Validate a workflow",
+    description="Validate and normalize a workflow without submitting or persisting it. "
+                "Authorization token should be provided in the Authorization header "
+                "when workspace-aware checks are required."
+)
+async def validate_workflow(
+    workflow_data: Dict[str, Any],
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> ValidateResponse:
+    """Validate a workflow without submission side effects.
+
+    Args:
+        workflow_data: Workflow JSON dictionary
+        authorization: Optional authorization token in Authorization header
+
+    Returns:
+        Validation response including normalized workflow_json
+
+    Raises:
+        HTTPException: 400 for validation errors, 500 for server errors
+    """
+    try:
+        logger.info("Received workflow validation request")
+        auth_token = authorization
+
+        result = workflow_manager.validate_workflow(
+            workflow_data,
+            auth_token=auth_token
+        )
+
+        return ValidateResponse(
+            valid=result.get("valid", True),
+            workflow_json=result.get("workflow_json", {}),
+            warnings=result.get("warnings", []),
+            auto_fixes=result.get("auto_fixes", []),
+            message=result.get("message", "Workflow validated successfully")
+        )
+
+    except ValueError as e:
+        logger.error(f"Workflow validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Workflow validation failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error: {str(e)}"
