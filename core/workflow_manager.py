@@ -270,8 +270,11 @@ class WorkflowManager:
             # Build step status list
             steps = []
             for step in workflow.get('steps', []):
+                # Pending workflows may not have scheduler-assigned step_id/task_id yet.
+                # StepStatus requires a string, so coerce null/empty values safely.
+                step_id_value = step.get('step_id') or step.get('task_id') or ''
                 steps.append(StepStatus(
-                    step_id=step.get('step_id', ''),
+                    step_id=step_id_value,
                     step_name=step.get('step_name', ''),
                     status=step.get('status', 'unknown'),
                     app=step.get('app', '')

@@ -19,6 +19,8 @@ from utils import metrics
 
 logger = get_logger(__name__)
 
+HOMOLOGY_PRECOMPUTED_DATABASES = {"bacteria-archaea", "viral-reference"}
+
 
 class WorkflowExecutor:
     """Orchestrates DAG-based workflow execution.
@@ -451,6 +453,31 @@ class WorkflowExecutor:
                     f"Workflow {workflow_id}: Resolved params for step '{step_name}' after runtime resolution:\n"
                     f"  Params: {json.dumps(params, indent=2)}"
                 )
+            
+            # Defensive check: Validate critical parameters before submission
+            # This catches cases where validation might have been bypassed or parameters changed
+            app_lower = app.lower() if app else ""
+            if "homology" in app_lower or app_lower == "blast":
+                db_source = params.get("db_source")
+                if db_source == "precomputed_database":
+                    db_precomputed = params.get("db_precomputed_database")
+                    if not db_precomputed or (isinstance(db_precomputed, str) and db_precomputed.strip() == ""):
+                        error_msg = (
+                            f"Workflow {workflow_id}: Step '{step_name}' has db_source='precomputed_database' "
+                            f"but db_precomputed_database is missing or empty. "
+                            f"This should have been caught during validation."
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    candidate = db_precomputed.strip().lower() if isinstance(db_precomputed, str) else db_precomputed
+                    if candidate not in HOMOLOGY_PRECOMPUTED_DATABASES:
+                        error_msg = (
+                            f"Workflow {workflow_id}: Step '{step_name}' has invalid "
+                            f"db_precomputed_database={db_precomputed!r}. Allowed values: "
+                            f"{sorted(HOMOLOGY_PRECOMPUTED_DATABASES)}."
+                        )
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
             
             # Log the full job spec being sent to scheduler
             logger.info(

@@ -8,8 +8,8 @@ mongodb:
   auth_source: admin
 
 api:
-  host: 127.0.0.1
-  port: 8000
+  host: 140.221.78.67 
+  port: 12007 
   debug: false
 
 scheduler:

@@ -7,9 +7,55 @@ from models.workflow import WorkflowDefinition, WorkflowStep
 from utils.logger import get_logger
 from validators import get_defaults, get_validator
 from utils.output_file_checker import check_and_resolve_output_conflicts
+from core.field_coercion_registry import (
+    coerce_workflow_definition,
+    validate_workflow_service_field_rules,
+)
 
 
 logger = get_logger(__name__)
+
+# Canonical BV-BRC AppService IDs by friendly/service alias.
+# This allows workflow ingestion to accept user-friendly lowercase names
+# while ensuring submitted steps use consistent app IDs.
+FRIENDLY_TO_APP_ID = {
+    "date": "Date",
+    "genome_assembly": "GenomeAssembly2",
+    "genome_annotation": "GenomeAnnotation",
+    "comprehensive_genome_analysis": "ComprehensiveGenomeAnalysis",
+    "blast": "Homology",
+    "primer_design": "PrimerDesign",
+    "variation": "Variation",
+    "tnseq": "TnSeq",
+    "bacterial_genome_tree": "CodonTree",
+    "gene_tree": "GeneTree",
+    "core_genome_mlst": "CoreGenomeMLST",
+    "whole_genome_snp": "WholeGenomeSNPAnalysis",
+    "taxonomic_classification": "TaxonomicClassification",
+    "metagenomic_binning": "MetagenomeBinning",
+    "metagenomic_read_mapping": "MetagenomicReadMapping",
+    "rnaseq": "RNASeq",
+    "expression_import": "ExpressionImport",
+    "sars_wastewater_analysis": "SARSWastewaterAnalysis",
+    "sequence_submission": "SequenceSubmission",
+    "influenza_ha_subtype_conversion": "InfluenzaHASubtypeConversion",
+    "subspecies_classification": "SubspeciesClassification",
+    "viral_assembly": "ViralAssembly",
+    "genome_alignment": "GenomeAlignment",
+    "sars_genome_analysis": "SARS2Assembly",
+    "msa_snp_analysis": "MSA",
+    "metacats": "MetaCATS",
+    "proteome_comparison": "GenomeComparison",
+    "comparative_systems": "ComparativeSystems",
+    "docking": "Docking",
+    "similar_genome_finder": "SimilarGenomeFinder",
+    "fastqutils": "FastqUtils",
+}
+
+# Extra aliases observed in service names/tools.
+EXTRA_APP_ALIASES = {
+    "hasubtypenumberingconversion": "InfluenzaHASubtypeConversion",
+}
 
 
 class WorkflowValidator:
@@ -26,22 +72,28 @@ class WorkflowValidator:
         """
         if not app_name or not isinstance(app_name, str):
             return app_name
+        app_name = app_name.strip()
 
         # If it already matches a registered validator/defaults, keep it.
         if get_validator(app_name) or get_defaults(app_name):
             return app_name
 
-        # Known aliases (most common cases we support in this codebase).
-        known_aliases = {
-            "genome_annotation": "GenomeAnnotation",
-            "comprehensive_genome_analysis": "ComprehensiveGenomeAnalysis",
-            "taxonomic_classification": "TaxonomicClassification",
-            "similar_genome_finder": "SimilarGenomeFinder",
-        }
-        if app_name in known_aliases:
-            candidate = known_aliases[app_name]
-            if get_validator(candidate) or get_defaults(candidate):
-                return candidate
+        lower_name = app_name.lower()
+
+        # 1) Friendly name aliases (snake_case service names).
+        if lower_name in FRIENDLY_TO_APP_ID:
+            return FRIENDLY_TO_APP_ID[lower_name]
+
+        # 2) Case-insensitive exact match against known App IDs.
+        app_ids = set(FRIENDLY_TO_APP_ID.values())
+        app_ids.update(EXTRA_APP_ALIASES.values())
+        for app_id in app_ids:
+            if lower_name == app_id.lower():
+                return app_id
+
+        # 3) Extra explicit aliases.
+        if lower_name in EXTRA_APP_ALIASES:
+            return EXTRA_APP_ALIASES[lower_name]
 
         # Conservative snake_case -> TitleCase conversion, but ONLY if it maps
         # to a registered validator/defaults target.
@@ -84,6 +136,19 @@ class WorkflowValidator:
                         f"Input step '{step.get('step_name')}' should not "
                         f"contain 'step_id'. IDs are assigned by the scheduler."
                     )
+            
+            # Apply field coercion BEFORE schema validation to fix common type errors
+            logger.info("Applying field type coercion rules")
+            workflow_data = coerce_workflow_definition(workflow_data)
+
+            # Apply cross-field service rules after coercion and before schema validation.
+            # This gives actionable errors for conditional requirements.
+            service_field_errors = validate_workflow_service_field_rules(workflow_data)
+            if service_field_errors:
+                raise ValueError(
+                    "Service field validation failed:\n  - "
+                    + "\n  - ".join(service_field_errors)
+                )
             
             # Validate using Pydantic model
             logger.info("Validating workflow schema")

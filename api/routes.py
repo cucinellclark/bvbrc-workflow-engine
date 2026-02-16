@@ -16,6 +16,33 @@ router = APIRouter()
 workflow_manager: WorkflowManager = None
 
 
+def _sanitize_incoming_workflow_payload(workflow_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize incoming workflow payloads before schema validation/submission.
+
+    Accepts either:
+    - Raw workflow manifest
+    - Wrapper payload containing {"workflow_json": {...}, ...}
+
+    Strips helper metadata fields that are not part of WorkflowDefinition.
+    """
+    payload = workflow_data if isinstance(workflow_data, dict) else {}
+
+    # Support wrapper payloads from planner responses.
+    if isinstance(payload.get("workflow_json"), dict):
+        payload = payload["workflow_json"]
+        logger.info("Unwrapped workflow_json wrapper from request payload")
+
+    cleaned = dict(payload)
+
+    # Tolerate planner metadata without failing strict schema validation.
+    if "workflow_description" in cleaned:
+        logger.info("Stripping non-schema field 'workflow_description' from workflow payload")
+        cleaned.pop("workflow_description", None)
+
+    return cleaned
+
+
 def set_workflow_manager(manager: WorkflowManager):
     """Set the workflow manager instance."""
     global workflow_manager
@@ -73,6 +100,7 @@ async def submit_workflow(
     """
     try:
         logger.info("Received workflow submission request")
+        workflow_data = _sanitize_incoming_workflow_payload(workflow_data)
         
         # Log the full incoming workflow data for debugging
         logger.info(
@@ -130,6 +158,7 @@ async def validate_workflow(
     """
     try:
         logger.info("Received workflow validation request")
+        workflow_data = _sanitize_incoming_workflow_payload(workflow_data)
         auth_token = authorization
 
         result = workflow_manager.validate_workflow(
