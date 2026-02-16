@@ -29,17 +29,22 @@ class ComprehensiveGenomeAnalysisDefaults(BaseDefaults):
             Dictionary of default parameter values
         """
         return {
-            "genome_size": 5000000,
-            "normalize": True,
-            "trim": True,
-            "coverage": 200,
-            "expected_genome_size": 5,
-            "genome_size_units": "M",
+            "recipe": "auto",
             "racon_iter": 2,
             "pilon_iter": 2,
-            "min_contig_len": 300,
-            "min_contig_cov": 5,
-            "filtlong": True,
+            "trim": False,
+            "normalize": False,
+            "filtlong": False,
             "target_depth": 200,
+            "genome_size": 5000000,
+            "min_contig_len": 300,
+            "min_contig_cov": 5.0,
+            "public": False,
+            "queue_nowait": False,
+            "skip_indexing": False,
+            "code": 0,
+            "domain": "auto",
+            "analyze_quality": False,
+            "debug_level": 0,
         }
 

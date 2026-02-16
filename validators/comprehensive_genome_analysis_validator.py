@@ -1,10 +1,4 @@
-"""
-ComprehensiveGenomeAnalysis service step validator.
-
-This validator handles:
-- Validating parameter types, values, and required fields for ComprehensiveGenomeAnalysis
-- Ensuring default parameters are present
-"""
+"""ComprehensiveGenomeAnalysis service step validator."""
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ValidationError
 import logging
@@ -13,6 +7,143 @@ from .base_validator import BaseStepValidator, ValidationResult
 
 logger = logging.getLogger(__name__)
 
+CGA_INPUT_TYPES = {"reads", "contigs", "genbank"}
+CGA_RECIPES = {
+    "auto",
+    "unicycler",
+    "canu",
+    "spades",
+    "meta-spades",
+    "plasmid-spades",
+    "single-cell",
+    "flye",
+}
+CGA_PLATFORMS = {"infer", "illumina", "pacbio", "pacbio_hifi", "nanopore"}
+CGA_DOMAINS = {"Bacteria", "Archaea", "Viruses", "auto"}
+CGA_CODES = {0, 1, 4, 11, 25}
+
+CGA_INPUT_TYPE_ALIASES = {
+    "read": "reads",
+    "reads": "reads",
+    "raw_reads": "reads",
+    "fastq": "reads",
+    "contig": "contigs",
+    "contigs": "contigs",
+    "assembled_contigs": "contigs",
+    "genbank": "genbank",
+    "gbk": "genbank",
+    "genbank_file": "genbank",
+}
+CGA_RECIPE_ALIASES = {
+    "meta_flye": "flye",
+    "meta-flye": "flye",
+    "metaflye": "flye",
+    "single_cell": "single-cell",
+    "meta_spades": "meta-spades",
+    "plasmid_spades": "plasmid-spades",
+}
+CGA_PLATFORM_ALIASES = {
+    "pacbio-hifi": "pacbio_hifi",
+    "hifi": "pacbio_hifi",
+}
+CGA_DOMAIN_ALIASES = {
+    "bacteria": "Bacteria",
+    "bacterial": "Bacteria",
+    "archaea": "Archaea",
+    "archaeal": "Archaea",
+    "virus": "Viruses",
+    "viruses": "Viruses",
+    "viral": "Viruses",
+    "auto": "auto",
+}
+
+
+def _extract_non_empty_file(entry: Dict[str, Any]) -> Optional[str]:
+    """Extract a usable read path from legacy read library objects."""
+    for key in ("file", "read", "read1", "read_file", "reads_file", "path"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _normalize_legacy_cga_libs(params: Dict[str, Any]) -> tuple[Dict[str, Any], List[str], List[str]]:
+    """Normalize legacy CGA read library payload shapes into canonical structure."""
+    normalized = dict(params)
+    warnings: List[str] = []
+    errors: List[str] = []
+
+    paired_libs = normalized.get("paired_end_libs")
+    if isinstance(paired_libs, list) and paired_libs:
+        has_canonical_pair = any(
+            isinstance(item, dict)
+            and isinstance(item.get("read1"), str)
+            and item.get("read1", "").strip()
+            for item in paired_libs
+        )
+        if not has_canonical_pair:
+            legacy_files: List[str] = []
+            for entry in paired_libs:
+                if isinstance(entry, dict):
+                    file_path = _extract_non_empty_file(entry)
+                    if file_path:
+                        legacy_files.append(file_path)
+            if legacy_files:
+                if len(legacy_files) % 2 != 0:
+                    errors.append(
+                        "paired_end_libs legacy format detected (file/lib_type) but file count is odd; "
+                        "cannot infer read pairs. Provide canonical paired_end_libs with read1/read2."
+                    )
+                else:
+                    canonical_pairs = []
+                    for i in range(0, len(legacy_files), 2):
+                        canonical_pairs.append(
+                            {
+                                "read1": legacy_files[i],
+                                "read2": legacy_files[i + 1],
+                                "platform": "infer",
+                            }
+                        )
+                    normalized["paired_end_libs"] = canonical_pairs
+                    warnings.append(
+                        "paired_end_libs used legacy file/lib_type objects; normalized to canonical read1/read2 pairs."
+                    )
+
+    single_libs = normalized.get("single_end_libs")
+    if isinstance(single_libs, list) and single_libs:
+        has_canonical_single = any(
+            isinstance(item, dict)
+            and isinstance(item.get("read"), str)
+            and item.get("read", "").strip()
+            for item in single_libs
+        )
+        if not has_canonical_single:
+            canonical_singles = []
+            for entry in single_libs:
+                if isinstance(entry, dict):
+                    file_path = _extract_non_empty_file(entry)
+                    if file_path:
+                        canonical_singles.append({"read": file_path, "platform": "infer"})
+            if canonical_singles:
+                normalized["single_end_libs"] = canonical_singles
+                warnings.append(
+                    "single_end_libs used legacy file/lib_type objects; normalized to canonical read/platform objects."
+                )
+
+    return normalized, warnings, errors
+
+
+def _normalize_platform(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return value
+    if not isinstance(value, str):
+        raise ValueError(f"platform must be a string, got {type(value)}")
+    candidate = value.strip().lower()
+    canonical = CGA_PLATFORM_ALIASES.get(candidate, candidate)
+    if canonical not in CGA_PLATFORMS:
+        raise ValueError(f"platform must be one of {sorted(CGA_PLATFORMS)}, got {value!r}")
+    return canonical
+
 
 class PairedEndLib(BaseModel):
     """Model for paired-end library structure."""
@@ -20,366 +151,417 @@ class PairedEndLib(BaseModel):
     read2: Optional[str] = None
     interleaved: bool = False
     read_orientation_outward: bool = False
-    platform: Optional[str] = None
-    
+    platform: str = "infer"
+
     class Config:
         extra = "allow"
+
+    @field_validator("platform", mode="before")
+    @classmethod
+    def validate_platform(cls, value):
+        return _normalize_platform(value if value is not None else "infer")
+
+    @field_validator("read1")
+    @classmethod
+    def validate_read1(cls, value):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("read1 is required and must be a non-empty string")
+        return value.strip()
+
+    @field_validator("read2")
+    @classmethod
+    def validate_read2(cls, value):
+        if value is None:
+            return value
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("read2 must be a non-empty string when provided")
+        return value.strip()
+
+
+class SingleEndLib(BaseModel):
+    """Model for single-end library structure."""
+    read: str
+    platform: str = "infer"
+
+    class Config:
+        extra = "allow"
+
+    @field_validator("platform", mode="before")
+    @classmethod
+    def validate_platform(cls, value):
+        return _normalize_platform(value if value is not None else "infer")
+
+    @field_validator("read")
+    @classmethod
+    def validate_read(cls, value):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("read is required and must be a non-empty string")
+        return value.strip()
 
 
 class ComprehensiveGenomeAnalysisParams(BaseModel):
-    """
-    Pydantic model for ComprehensiveGenomeAnalysis step parameters.
-    
-    This model defines the expected structure, types, and validation rules
-    for ComprehensiveGenomeAnalysis service parameters.
-    
-    ComprehensiveGenomeAnalysis combines assembly and annotation into one service.
-    """
-    # Input sources - at least one must be provided
+    """Pydantic model for ComprehensiveGenomeAnalysis step parameters."""
+    input_type: str = Field(..., description="Input type")
+    output_path: str = Field(..., description="Workspace output path")
+    output_file: str = Field(..., description="Output file basename")
+    scientific_name: str = Field(..., description="Scientific name")
+
+    paired_end_libs: Optional[List[Dict[str, Any]]] = Field(None, description="Paired-end libraries")
+    single_end_libs: Optional[List[Dict[str, Any]]] = Field(None, description="Single-end libraries")
     srr_ids: Optional[List[str]] = Field(None, description="List of SRR IDs")
-    paired_end_libs: Optional[List[Dict[str, Any]]] = Field(None, description="List of paired-end libraries")
-    single_end_libs: Optional[List[Dict[str, Any]]] = Field(None, description="List of single-end libraries")
-    
-    # Required output parameters
-    output_path: str = Field(..., description="Workspace output path for results")
-    output_file: str = Field("cga_output", description="Output file name")
-    
-    # Optional recipe/strategy parameters
-    recipe: Optional[str] = Field("auto", description="Assembly recipe to use")
-    
-    # Annotation parameters (optional)
-    scientific_name: Optional[str] = Field(None, description="Scientific name of the organism")
-    taxonomy_id: Optional[str] = Field(None, description="NCBI taxonomy ID")
-    
-    # Assembly parameters with defaults (should be provided by defaults provider)
-    genome_size: int = Field(5000000, description="Expected genome size in base pairs")
-    normalize: bool = Field(True, description="Whether to normalize reads")
-    trim: bool = Field(True, description="Whether to trim reads")
-    coverage: int = Field(200, description="Target coverage depth")
-    expected_genome_size: int = Field(5, description="Expected genome size")
-    genome_size_units: str = Field("M", description="Units for expected genome size")
-    racon_iter: int = Field(2, description="Number of Racon iterations")
-    pilon_iter: int = Field(2, description="Number of Pilon iterations")
-    min_contig_len: int = Field(300, description="Minimum contig length")
-    min_contig_cov: int = Field(5, description="Minimum contig coverage")
-    filtlong: bool = Field(True, description="Whether to use Filtlong")
-    target_depth: int = Field(200, description="Target sequencing depth")
-    
-    # Allow additional fields (for flexibility with variable references)
+
+    reference_assembly: Optional[str] = Field(None, description="Reference assembly contigs")
+    contigs: Optional[str] = Field(None, description="Contigs object")
+    genbank_file: Optional[str] = Field(None, description="GenBank input object")
+    gto: Optional[str] = Field(None, description="Preannotated genome object")
+
+    taxonomy_id: Optional[int] = Field(None, description="NCBI taxonomy ID")
+    code: int = Field(0, description="Genetic code")
+    domain: str = Field("auto", description="Domain")
+
+    recipe: str = Field("auto", description="Assembly recipe")
+    racon_iter: int = Field(2, description="Racon iterations")
+    pilon_iter: int = Field(2, description="Pilon iterations")
+    trim: bool = Field(False, description="Trim reads")
+    normalize: bool = Field(False, description="Normalize reads")
+    filtlong: bool = Field(False, description="Filter long reads")
+    target_depth: int = Field(200, description="Target depth")
+    genome_size: Optional[Any] = Field(5000000, description="Estimated genome size")
+    min_contig_len: int = Field(300, description="Min contig length")
+    min_contig_cov: float = Field(5.0, description="Min contig coverage")
+    public: bool = Field(False, description="Public genome")
+    queue_nowait: bool = Field(False, description="Skip waiting for indexing queue")
+    skip_indexing: bool = Field(False, description="Do not index")
+    analyze_quality: Optional[bool] = Field(None, description="Enable quality analysis")
+    debug_level: int = Field(0, description="Debug level")
+
+    # Legacy/frontend convenience fields accepted but normalized by validation logic.
+    coverage: Optional[int] = Field(None, description="Legacy alias for target_depth")
+    expected_genome_size: Optional[int] = Field(None, description="Legacy estimated genome size")
+    genome_size_units: Optional[str] = Field(None, description="Legacy genome size units")
+
     class Config:
         extra = "allow"
-    
-    @field_validator('srr_ids')
+
+    @field_validator("input_type", mode="before")
     @classmethod
-    def validate_srr_ids(cls, v):
-        """Validate srr_ids if provided."""
-        if v is not None:
-            if not isinstance(v, list):
-                raise ValueError("srr_ids must be a list")
-            if len(v) == 0:
-                raise ValueError("srr_ids cannot be empty")
-            for srr_id in v:
-                if not isinstance(srr_id, str) or not srr_id.strip():
-                    raise ValueError(f"Invalid SRR ID: {srr_id}")
-        return v
-    
-    @field_validator('paired_end_libs', 'single_end_libs')
+    def validate_input_type(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("input_type must be a string")
+        candidate = value.strip().lower()
+        candidate = CGA_INPUT_TYPE_ALIASES.get(candidate, candidate)
+        if candidate not in CGA_INPUT_TYPES:
+            raise ValueError(f"input_type must be one of {sorted(CGA_INPUT_TYPES)}, got {value!r}")
+        return candidate
+
+    @field_validator("output_path", "output_file", "scientific_name")
     @classmethod
-    def validate_lib_lists(cls, v):
-        """Validate library lists if provided."""
-        if v is not None:
-            if not isinstance(v, list):
-                raise ValueError("Library list must be a list")
-            if len(v) == 0:
-                raise ValueError("Library list cannot be empty")
-        return v
-    
-    @field_validator('taxonomy_id')
+    def validate_required_strings(cls, value):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("value must be a non-empty string")
+        return value.strip()
+
+    @field_validator("taxonomy_id", mode="before")
     @classmethod
-    def validate_taxonomy_id(cls, v):
-        """Validate taxonomy_id if provided."""
-        if v is not None:
-            v_str = str(v).strip()
-            try:
-                taxonomy_int = int(v_str)
-            except ValueError:
-                raise ValueError(f"taxonomy_id must be a valid integer, got '{v}'")
-            if taxonomy_int <= 0:
-                raise ValueError(f"taxonomy_id must be a positive integer, got '{v}'")
-            return v_str
-        return v
-    
-    @field_validator('genome_size')
+    def validate_taxonomy_id(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        try:
+            value = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"taxonomy_id must be an integer, got {value!r}") from exc
+        if value <= 0:
+            raise ValueError("taxonomy_id must be a positive integer")
+        return value
+
+    @field_validator("code", mode="before")
     @classmethod
-    def validate_genome_size(cls, v):
-        """Validate genome_size."""
-        if v is not None:
-            if not isinstance(v, (int, float)) or v <= 0:
-                raise ValueError(f"genome_size must be a positive number, got {v}")
-        return int(v) if v is not None else v
-    
-    @field_validator('racon_iter', 'pilon_iter')
+    def validate_code(cls, value):
+        try:
+            code = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"code must be one of {sorted(CGA_CODES)}, got {value!r}") from exc
+        if code not in CGA_CODES:
+            raise ValueError(f"code must be one of {sorted(CGA_CODES)}, got {code!r}")
+        return code
+
+    @field_validator("domain", mode="before")
     @classmethod
-    def validate_iterations(cls, v):
-        """Validate iteration counts."""
-        if v is not None:
-            if not isinstance(v, int) or v < 0:
-                raise ValueError(f"Iteration count must be a non-negative integer, got {v}")
-        return v
-    
-    @field_validator('min_contig_len', 'min_contig_cov', 'coverage', 'target_depth')
+    def validate_domain(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("domain must be a string")
+        candidate = CGA_DOMAIN_ALIASES.get(value.strip().lower(), value.strip())
+        if candidate not in CGA_DOMAINS:
+            raise ValueError(f"domain must be one of {sorted(CGA_DOMAINS)}, got {value!r}")
+        return candidate
+
+    @field_validator("recipe", mode="before")
     @classmethod
-    def validate_positive_integers(cls, v):
-        """Validate positive integer parameters."""
-        if v is not None:
-            if not isinstance(v, int) or v <= 0:
-                raise ValueError(f"Value must be a positive integer, got {v}")
-        return v
-    
-    @field_validator('genome_size_units')
+    def validate_recipe(cls, value):
+        if value is None:
+            return "auto"
+        if not isinstance(value, str):
+            raise ValueError("recipe must be a string")
+        candidate = value.strip().lower()
+        candidate = CGA_RECIPE_ALIASES.get(candidate, candidate)
+        if candidate not in CGA_RECIPES:
+            raise ValueError(f"recipe must be one of {sorted(CGA_RECIPES)}, got {value!r}")
+        return candidate
+
+    @field_validator(
+        "trim",
+        "normalize",
+        "filtlong",
+        "public",
+        "queue_nowait",
+        "skip_indexing",
+        "analyze_quality",
+        mode="before",
+    )
     @classmethod
-    def validate_genome_size_units(cls, v):
-        """Validate genome_size_units."""
-        if v is not None:
-            valid_units = ['bp', 'K', 'M', 'G']
-            if v not in valid_units:
-                raise ValueError(f"genome_size_units must be one of {valid_units}, got {v}")
-        return v
-    
-    @field_validator('expected_genome_size')
+    def validate_booleans(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            candidate = value.strip().lower()
+            if candidate in {"true", "1", "yes", "on"}:
+                return True
+            if candidate in {"false", "0", "no", "off"}:
+                return False
+        raise ValueError(f"value must be boolean-like, got {value!r}")
+
+    @field_validator("racon_iter", "pilon_iter", "target_depth", "min_contig_len", "debug_level", mode="before")
     @classmethod
-    def validate_expected_genome_size(cls, v):
-        """Validate expected_genome_size."""
-        if v is not None:
-            if not isinstance(v, (int, float)) or v <= 0:
-                raise ValueError(f"expected_genome_size must be a positive number, got {v}")
-        return v
+    def validate_non_negative_ints(cls, value):
+        try:
+            intval = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"value must be an integer, got {value!r}") from exc
+        if intval < 0:
+            raise ValueError("value must be >= 0")
+        return intval
+
+    @field_validator("min_contig_cov", mode="before")
+    @classmethod
+    def validate_positive_float(cls, value):
+        try:
+            floatval = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"min_contig_cov must be numeric, got {value!r}") from exc
+        if floatval <= 0:
+            raise ValueError("min_contig_cov must be > 0")
+        return floatval
+
+    @field_validator("genome_size", mode="before")
+    @classmethod
+    def validate_genome_size(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, (int, float)):
+            if value <= 0:
+                raise ValueError("genome_size must be > 0")
+            return int(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            if stripped[-1].lower() in {"k", "m", "g"} and stripped[:-1].isdigit():
+                return stripped
+            if stripped.isdigit():
+                return int(stripped)
+        raise ValueError("genome_size must be a positive integer or size string like '5M'")
+
+    @field_validator("paired_end_libs", "single_end_libs", "srr_ids")
+    @classmethod
+    def validate_non_empty_lists(cls, value):
+        if value is not None and isinstance(value, list) and len(value) == 0:
+            raise ValueError("list cannot be empty")
+        return value
 
 
 class ComprehensiveGenomeAnalysisValidator(BaseStepValidator):
-    """
-    Validator for ComprehensiveGenomeAnalysis service steps.
-    
-    Validates step structure and parameters for ComprehensiveGenomeAnalysis.
-    Ensures that default parameters are present.
-    """
-    
-    # Expected default parameters (should match ComprehensiveGenomeAnalysisDefaults)
-    REQUIRED_DEFAULTS = {
-        "genome_size",
-        "normalize",
-        "trim",
-        "coverage",
-        "expected_genome_size",
-        "genome_size_units",
-        "racon_iter",
-        "pilon_iter",
-        "min_contig_len",
-        "min_contig_cov",
-        "filtlong",
-        "target_depth",
-    }
-    
+    """Validator for ComprehensiveGenomeAnalysis service steps."""
+
     def validate_params(
         self,
         params: Dict[str, Any],
         app_name: str
     ) -> ValidationResult:
-        """
-        Validate ComprehensiveGenomeAnalysis step parameters using Pydantic model.
-        
-        Also validates that all expected default parameters are present.
-        
-        Args:
-            params: Step parameters dictionary
-            app_name: Application name
-        
-        Returns:
-            ValidationResult with validated params, warnings, and errors
-        """
-        warnings = []
-        errors = []
+        warnings: List[str] = []
+        errors: List[str] = []
         validated_params = params.copy()
-        
-        # First, check that required defaults are present
-        missing_defaults = []
-        for default_key in self.REQUIRED_DEFAULTS:
-            if default_key not in params:
-                missing_defaults.append(default_key)
-        
-        if missing_defaults:
-            errors.append(
-                f"Missing required default parameters: {', '.join(missing_defaults)}. "
-                "These should be provided by the defaults provider."
-            )
-        
-        # Check that at least one input source is provided
-        has_input = (
-            params.get('srr_ids') or 
-            params.get('paired_end_libs') or 
-            params.get('single_end_libs')
+
+        # Normalize common legacy aliases before Pydantic validation.
+        if "coverage" in validated_params and "target_depth" not in validated_params:
+            validated_params["target_depth"] = validated_params.get("coverage")
+
+        # Frontend-derived jobs effectively tie scientific_name to output naming;
+        # tolerate blank scientific_name by deriving from output_file.
+        sci_name = validated_params.get("scientific_name")
+        if not isinstance(sci_name, str) or not sci_name.strip():
+            fallback_name = validated_params.get("output_file")
+            if isinstance(fallback_name, str) and fallback_name.strip():
+                validated_params["scientific_name"] = fallback_name.strip()
+                warnings.append(
+                    "scientific_name was empty; using output_file as fallback value."
+                )
+
+        # Normalize known legacy read-lib shapes before strict model validation.
+        validated_params, legacy_warnings, legacy_errors = _normalize_legacy_cga_libs(
+            validated_params
         )
-        if not has_input:
-            errors.append(
-                "At least one input source must be provided: "
-                "'srr_ids', 'paired_end_libs', or 'single_end_libs'"
-            )
-        
-        # Check for multiple input sources (warn, not error)
-        input_count = sum([
-            1 if params.get('srr_ids') else 0,
-            1 if params.get('paired_end_libs') else 0,
-            1 if params.get('single_end_libs') else 0
-        ])
-        if input_count > 1:
-            warnings.append(
-                "Multiple input sources provided. "
-                "Only one input source should be specified."
-            )
-        
+        warnings.extend(legacy_warnings)
+        errors.extend(legacy_errors)
+
         try:
-            # Validate using Pydantic model
-            validated_model = ComprehensiveGenomeAnalysisParams(**params)
+            validated_model = ComprehensiveGenomeAnalysisParams(**validated_params)
             validated_params = validated_model.model_dump(exclude_none=False)
-            
-            # Additional business logic validations
-            # Validate paired_end_libs structure if provided
-            if validated_params.get('paired_end_libs'):
-                for i, lib in enumerate(validated_params['paired_end_libs']):
+
+            # Validate nested library structure.
+            if validated_params.get("paired_end_libs"):
+                for i, lib in enumerate(validated_params["paired_end_libs"]):
                     try:
-                        PairedEndLib(**lib)
+                        model = PairedEndLib(**lib)
+                        if not model.interleaved and not model.read2:
+                            errors.append(
+                                f"paired_end_libs[{i}]: read2 is required when interleaved is false."
+                            )
                     except ValidationError as e:
-                        errors.append(
-                            f"paired_end_libs[{i}]: Invalid structure - {e.errors()[0]['msg']}"
-                        )
-            
-            # Validate recipe value
-            recipe = validated_params.get('recipe', 'auto')
-            valid_recipes = ['auto', 'standard', 'plasmid', 'viral']
-            if recipe and recipe not in valid_recipes:
-                warnings.append(
-                    f"Recipe '{recipe}' is not a standard recipe. "
-                    f"Valid recipes: {', '.join(valid_recipes)}"
-                )
-            
-            # Check that either scientific_name or taxonomy_id is provided (recommended)
-            if not validated_params.get('scientific_name') and not validated_params.get('taxonomy_id'):
-                warnings.append(
-                    "Neither 'scientific_name' nor 'taxonomy_id' is provided. "
-                    "At least one is recommended for proper annotation."
-                )
-            
-            # Validate output_path
-            output_path = validated_params.get('output_path', '')
-            if output_path and not output_path.startswith('${') and not output_path.startswith('/'):
-                warnings.append(
-                    f"output_path '{output_path}' doesn't appear to be a valid path "
-                    "(should start with '/' or be a variable reference)"
-                )
-            
-            # Set input_type based on which input source is provided
-            # This is required by the ComprehensiveGenomeAnalysis app service
-            if not validated_params.get('input_type'):
-                srr_ids = validated_params.get('srr_ids')
-                paired_end_libs = validated_params.get('paired_end_libs')
-                single_end_libs = validated_params.get('single_end_libs')
-                
-                if srr_ids and (isinstance(srr_ids, list) and len(srr_ids) > 0):
-                    validated_params['input_type'] = 'srr_ids'
-                elif paired_end_libs and (isinstance(paired_end_libs, list) and len(paired_end_libs) > 0):
-                    validated_params['input_type'] = 'paired_end_libs'
-                elif single_end_libs and (isinstance(single_end_libs, list) and len(single_end_libs) > 0):
-                    validated_params['input_type'] = 'single_end_libs'
-                else:
-                    # This shouldn't happen if validation above worked, but set a default
-                    errors.append(
-                        "Cannot determine input_type: no valid input source provided"
-                    )
-            
-            logger.debug(
-                f"ComprehensiveGenomeAnalysis: Validated {len(validated_params)} parameters"
+                        errors.append(f"paired_end_libs[{i}]: {e.errors()[0]['msg']}")
+
+            if validated_params.get("single_end_libs"):
+                for i, lib in enumerate(validated_params["single_end_libs"]):
+                    try:
+                        SingleEndLib(**lib)
+                    except ValidationError as e:
+                        errors.append(f"single_end_libs[{i}]: {e.errors()[0]['msg']}")
+
+            # Conditional required and compatibility checks by input_type.
+            input_type = validated_params.get("input_type")
+            has_reads = any(
+                validated_params.get(field) not in (None, "", [])
+                for field in ("paired_end_libs", "single_end_libs", "srr_ids")
             )
-            
-        except ValidationError as e:
-            # Pydantic validation errors
-            for error in e.errors():
-                field = '.'.join(str(loc) for loc in error['loc'])
-                error_msg = error['msg']
-                errors.append(
-                    f"Parameter '{field}': {error_msg}"
+            has_contigs = any(
+                validated_params.get(field) not in (None, "", [])
+                for field in ("contigs", "reference_assembly")
+            )
+            has_genbank = any(
+                validated_params.get(field) not in (None, "", [])
+                for field in ("genbank_file", "gto")
+            )
+
+            if input_type == "reads":
+                if not has_reads:
+                    errors.append(
+                        "When input_type is 'reads', provide at least one of: paired_end_libs, single_end_libs, srr_ids."
+                    )
+                if has_contigs or has_genbank:
+                    errors.append(
+                        "When input_type is 'reads', do not provide contigs/genbank inputs (contigs, reference_assembly, genbank_file, gto)."
+                    )
+            elif input_type == "contigs":
+                if not has_contigs:
+                    errors.append(
+                        "When input_type is 'contigs', provide at least one of: contigs, reference_assembly."
+                    )
+                if has_reads or has_genbank:
+                    errors.append(
+                        "When input_type is 'contigs', do not provide reads/genbank inputs."
+                    )
+            elif input_type == "genbank":
+                if not has_genbank:
+                    errors.append(
+                        "When input_type is 'genbank', provide at least one of: genbank_file, gto."
+                    )
+                if has_reads or has_contigs:
+                    errors.append(
+                        "When input_type is 'genbank', do not provide reads/contigs inputs."
+                    )
+
+            # Output-path style warning mirrors other validators.
+            output_path = validated_params.get("output_path", "")
+            if output_path and not output_path.startswith("${") and not output_path.startswith("/"):
+                warnings.append(
+                    f"output_path '{output_path}' does not appear absolute (expected '/...' or variable reference)."
                 )
+
+            if validated_params.get("taxonomy_id") is None:
+                warnings.append(
+                    "taxonomy_id is not provided; job may still run but taxonomy-driven validation is weaker."
+                )
+
+            logger.debug(
+                "ComprehensiveGenomeAnalysis: validated %s parameters",
+                len(validated_params),
+            )
+
+        except ValidationError as e:
+            for error in e.errors():
+                field = ".".join(str(loc) for loc in error["loc"])
+                errors.append(f"Parameter '{field}': {error['msg']}")
             logger.warning(
-                f"ComprehensiveGenomeAnalysis: Validation failed with {len(errors)} error(s)"
+                "ComprehensiveGenomeAnalysis validation failed with %s error(s)",
+                len(errors),
             )
         except Exception as e:
-            # Unexpected errors during validation
             errors.append(f"Unexpected validation error: {str(e)}")
             logger.error(
-                f"ComprehensiveGenomeAnalysis: Unexpected validation error: {e}",
-                exc_info=True
+                "ComprehensiveGenomeAnalysis unexpected validation error: %s",
+                e,
+                exc_info=True,
             )
-        
-        return ValidationResult(
-            params=validated_params,
-            warnings=warnings,
-            errors=errors
-        )
-    
+
+        return ValidationResult(params=validated_params, warnings=warnings, errors=errors)
+
     def validate_outputs(
         self,
         outputs: Dict[str, str],
         params: Dict[str, Any],
         app_name: str
     ) -> ValidationResult:
-        """
-        Validate ComprehensiveGenomeAnalysis step outputs.
-        
-        Checks that outputs reference valid parameters and have reasonable structure.
-        
-        Args:
-            outputs: Step outputs dictionary
-            params: Step parameters (for context)
-            app_name: Application name
-        
-        Returns:
-            ValidationResult with warnings and errors
-        """
-        warnings = []
-        errors = []
-        
-        # Call parent validation first
+        warnings: List[str] = []
+        errors: List[str] = []
+
         parent_result = super().validate_outputs(outputs, params, app_name)
         warnings.extend(parent_result.warnings)
         errors.extend(parent_result.errors)
-        
-        # ComprehensiveGenomeAnalysis-specific output validation
-        # Common output keys for ComprehensiveGenomeAnalysis (combines assembly + annotation)
+
         expected_outputs = [
-            'genome_object', 'contigs_fasta', 'annotation_report', 
-            'genbank_file', 'gff_file'
+            "genome_object",
+            "contigs_fasta",
+            "annotation_report",
+            "genbank_file",
+            "gff_file",
+            "genome_report",
+            "genome_file",
+            "job_output_path",
         ]
-        
-        for key in outputs.keys():
-            # Check if output key is recognized
+
+        for key, output_value in outputs.items():
             if key not in expected_outputs:
                 warnings.append(
                     f"Output key '{key}' is not a standard ComprehensiveGenomeAnalysis output. "
                     f"Expected keys: {', '.join(expected_outputs)}"
                 )
-            
-            # Check that output value references params appropriately
-            output_value = outputs[key]
-            if '${params.output_path}' not in output_value and '${params.output_file}' not in output_value:
-                # Not a hard error, but worth warning about
-                if not output_value.startswith('${'):
-                    warnings.append(
-                        f"Output '{key}' path doesn't reference params.output_path or params.output_file. "
-                        "This may cause issues if output paths change."
-                    )
-        
-        return ValidationResult(
-            params={},
-            warnings=warnings,
-            errors=errors
-        )
+            if (
+                key in expected_outputs
+                and
+                isinstance(output_value, str)
+                and "${params.output_path}" not in output_value
+                and "${params.output_file}" not in output_value
+                and not output_value.startswith("${")
+                and not output_value.startswith("/")
+            ):
+                warnings.append(
+                    f"Output '{key}' path does not reference params.output_path/output_file."
+                )
+
+        return ValidationResult(params={}, warnings=warnings, errors=errors)
 

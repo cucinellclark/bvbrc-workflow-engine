@@ -27,6 +27,60 @@ HOMOLOGY_PRECOMPUTED_DB_ALIASES = {
     "viral reference": "viral-reference",
 }
 
+# ComprehensiveGenomeAnalysis enum allowlists from app spec.
+CGA_INPUT_TYPES = {"reads", "contigs", "genbank"}
+CGA_RECIPES = {
+    "auto",
+    "unicycler",
+    "canu",
+    "spades",
+    "meta-spades",
+    "plasmid-spades",
+    "single-cell",
+    "flye",
+}
+CGA_DOMAINS = {"Bacteria", "Archaea", "Viruses", "auto"}
+CGA_CODES = {0, 1, 4, 11, 25}
+
+# Normalize common legacy/LLM variants to canonical ComprehensiveGenomeAnalysis values.
+CGA_INPUT_TYPE_ALIASES = {
+    "read": "reads",
+    "reads": "reads",
+    "raw_reads": "reads",
+    "fastq": "reads",
+    "read_file": "reads",
+    "contig": "contigs",
+    "contigs": "contigs",
+    "assembled_contigs": "contigs",
+    "contig_file": "contigs",
+    "genbank": "genbank",
+    "gbk": "genbank",
+    "genbank_file": "genbank",
+}
+CGA_RECIPE_ALIASES = {
+    "meta_flye": "flye",
+    "meta-flye": "flye",
+    "metaflye": "flye",
+    "single_cell": "single-cell",
+    "meta_spades": "meta-spades",
+    "plasmid_spades": "plasmid-spades",
+}
+CGA_DOMAIN_ALIASES = {
+    "bacteria": "Bacteria",
+    "bacterial": "Bacteria",
+    "archaea": "Archaea",
+    "archaeal": "Archaea",
+    "virus": "Viruses",
+    "viruses": "Viruses",
+    "viral": "Viruses",
+    "auto": "auto",
+}
+CGA_CODE_ALIASES = {
+    "11 (archaea & most bacteria)": 11,
+    "4 (mycoplasma, spiroplasma, & ureaplasma )": 4,
+    "25 (candidate division sr1 & gracilibacteria)": 25,
+}
+
 
 # ============================================================================
 # Pattern-Based Coercion Rules (apply to all services)
@@ -153,6 +207,26 @@ SERVICE_FIELD_RULES: Dict[str, Dict[str, Callable[[Any], Any]]] = {
     "genomealignment": {
         "genome_ids": _coerce_to_list,
     },
+    "comprehensivegenomeanalysis": {
+        "paired_end_libs": _coerce_to_list,
+        "single_end_libs": _coerce_to_list,
+        "srr_ids": _coerce_to_list,
+        "taxonomy_id": lambda v: int(_coerce_to_number(v)) if v not in (None, "", []) else v,
+        "code": lambda v: int(_coerce_to_number(v)) if v not in (None, "", []) else v,
+        "racon_iter": lambda v: int(_coerce_to_number(v)) if v not in (None, "", []) else v,
+        "pilon_iter": lambda v: int(_coerce_to_number(v)) if v not in (None, "", []) else v,
+        "target_depth": lambda v: int(_coerce_to_number(v)) if v not in (None, "", []) else v,
+        "min_contig_len": lambda v: int(_coerce_to_number(v)) if v not in (None, "", []) else v,
+        "min_contig_cov": _coerce_to_number,
+        "genome_size": _coerce_to_number,
+        "trim": _coerce_to_bool,
+        "normalize": _coerce_to_bool,
+        "filtlong": _coerce_to_bool,
+        "public": _coerce_to_bool,
+        "queue_nowait": _coerce_to_bool,
+        "skip_indexing": _coerce_to_bool,
+        "analyze_quality": _coerce_to_bool,
+    },
 }
 
 # Field aliases by service to normalize common LLM variants.
@@ -165,6 +239,15 @@ SERVICE_FIELD_ALIASES: Dict[str, Dict[str, str]] = {
     "blast": {
         "precomputed_database": "db_precomputed_database",
         "db_precomputed_db": "db_precomputed_database",
+    },
+    "comprehensivegenomeanalysis": {
+        "tax_id": "taxonomy_id",
+        "taxon_id": "taxonomy_id",
+        "taxonid": "taxonomy_id",
+        "srr_accession": "srr_ids",
+        "srr_accessions": "srr_ids",
+        "output_folder": "output_path",
+        "output_name": "output_file",
     },
 }
 
@@ -220,6 +303,35 @@ CONDITIONAL_REQUIRED_RULES: Dict[str, List[Dict[str, Any]]] = {
             "equals": "id_list",
             "required": ["db_id_list"],
             "message": "When db_source is 'id_list', db_id_list must be provided.",
+        },
+    ],
+    "comprehensivegenomeanalysis": [
+        {
+            "field": "input_type",
+            "equals": "reads",
+            "required_one_of": ["paired_end_libs", "single_end_libs", "srr_ids"],
+            "message": (
+                "When input_type is 'reads', at least one reads source must be provided: "
+                "paired_end_libs, single_end_libs, or srr_ids."
+            ),
+        },
+        {
+            "field": "input_type",
+            "equals": "contigs",
+            "required_one_of": ["contigs", "reference_assembly"],
+            "message": (
+                "When input_type is 'contigs', at least one contig source must be provided: "
+                "contigs or reference_assembly."
+            ),
+        },
+        {
+            "field": "input_type",
+            "equals": "genbank",
+            "required_one_of": ["genbank_file", "gto"],
+            "message": (
+                "When input_type is 'genbank', at least one GenBank source must be provided: "
+                "genbank_file or gto."
+            ),
         },
     ],
 }
@@ -285,6 +397,67 @@ def _normalize_homology_precomputed_database(
     return params
 
 
+def _normalize_cga_enum_aliases(step_app: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize known ComprehensiveGenomeAnalysis enum aliases."""
+    if not isinstance(params, dict):
+        return params
+    service_key = _normalize_service_name(step_app)
+    if service_key != "comprehensivegenomeanalysis":
+        return params
+
+    normalized = dict(params)
+
+    input_type = normalized.get("input_type")
+    if isinstance(input_type, str):
+        candidate = input_type.strip().lower()
+        canonical = CGA_INPUT_TYPE_ALIASES.get(candidate, candidate)
+        if canonical != input_type:
+            normalized["input_type"] = canonical
+            logger.info(
+                "Normalized ComprehensiveGenomeAnalysis input_type: %r -> %r",
+                input_type,
+                canonical,
+            )
+
+    recipe = normalized.get("recipe")
+    if isinstance(recipe, str):
+        candidate = recipe.strip().lower()
+        canonical = CGA_RECIPE_ALIASES.get(candidate, candidate)
+        if canonical != recipe:
+            normalized["recipe"] = canonical
+            logger.info(
+                "Normalized ComprehensiveGenomeAnalysis recipe: %r -> %r",
+                recipe,
+                canonical,
+            )
+
+    domain = normalized.get("domain")
+    if isinstance(domain, str):
+        candidate = domain.strip().lower()
+        canonical = CGA_DOMAIN_ALIASES.get(candidate, domain.strip())
+        if canonical != domain:
+            normalized["domain"] = canonical
+            logger.info(
+                "Normalized ComprehensiveGenomeAnalysis domain: %r -> %r",
+                domain,
+                canonical,
+            )
+
+    code = normalized.get("code")
+    if isinstance(code, str):
+        candidate = code.strip()
+        if candidate in CGA_CODE_ALIASES:
+            canonical = CGA_CODE_ALIASES[candidate]
+            normalized["code"] = canonical
+            logger.info(
+                "Normalized ComprehensiveGenomeAnalysis code: %r -> %r",
+                code,
+                canonical,
+            )
+
+    return normalized
+
+
 # ============================================================================
 # Main Coercion Engine
 # ============================================================================
@@ -309,6 +482,7 @@ def coerce_workflow_step_params(
     
     params = _apply_field_aliases(step_app, params)
     params = _normalize_homology_precomputed_database(step_app, params)
+    params = _normalize_cga_enum_aliases(step_app, params)
     coerced = {}
     changed_fields = []
     
@@ -378,6 +552,7 @@ def validate_step_service_field_rules(step_app: str, params: Dict[str, Any]) -> 
         condition_field = rule.get("field")
         condition_value = rule.get("equals")
         required_fields = rule.get("required", [])
+        required_one_of = rule.get("required_one_of", [])
         if params.get(condition_field) != condition_value:
             continue
 
@@ -395,6 +570,23 @@ def validate_step_service_field_rules(step_app: str, params: Dict[str, Any]) -> 
             )
             errors.append(f"{message} Missing: {', '.join(missing)}.")
 
+        if required_one_of:
+            present = any(
+                field in params
+                and params.get(field) not in (None, "", [])
+                and not (
+                    isinstance(params.get(field), str)
+                    and params.get(field).strip() == ""
+                )
+                for field in required_one_of
+            )
+            if not present:
+                message = rule.get("message") or (
+                    f"When {condition_field} is {condition_value!r}, "
+                    f"at least one of {', '.join(required_one_of)} must be provided."
+                )
+                errors.append(message)
+
     # Homology/BLAST: enforce explicit allowlist when using precomputed databases.
     if service_key in {"homology", "blast"} and params.get("db_source") == "precomputed_database":
         precomputed = params.get("db_precomputed_database")
@@ -408,6 +600,75 @@ def validate_step_service_field_rules(step_app: str, params: Dict[str, Any]) -> 
                 "When db_source is 'precomputed_database', db_precomputed_database "
                 f"must be one of: {allowed}. Got: {precomputed!r}."
             )
+
+    # ComprehensiveGenomeAnalysis: strict enum allowlists and input compatibility rules.
+    if service_key == "comprehensivegenomeanalysis":
+        input_type = params.get("input_type")
+        if isinstance(input_type, str):
+            candidate = input_type.strip().lower()
+        else:
+            candidate = input_type
+        if candidate not in CGA_INPUT_TYPES:
+            errors.append(
+                "input_type must be one of: reads, contigs, genbank. "
+                f"Got: {input_type!r}."
+            )
+
+        recipe = params.get("recipe")
+        if recipe is not None:
+            recipe_candidate = recipe.strip().lower() if isinstance(recipe, str) else recipe
+            if recipe_candidate not in CGA_RECIPES:
+                errors.append(
+                    "recipe must be one of: "
+                    f"{', '.join(sorted(CGA_RECIPES))}. Got: {recipe!r}."
+                )
+
+        domain = params.get("domain")
+        if domain is not None and domain not in CGA_DOMAINS:
+            errors.append(
+                "domain must be one of: "
+                f"{', '.join(sorted(CGA_DOMAINS))}. Got: {domain!r}."
+            )
+
+        code = params.get("code")
+        if code is not None:
+            code_candidate = int(code) if isinstance(code, (int, float, str)) and str(code).strip().isdigit() else code
+            if code_candidate not in CGA_CODES:
+                errors.append(
+                    f"code must be one of: {sorted(CGA_CODES)}. Got: {code!r}."
+                )
+
+        # Catch ambiguous payloads where fields conflict with the declared input_type.
+        if candidate == "reads":
+            conflicts = [
+                name for name in ("contigs", "genbank_file", "gto")
+                if params.get(name) not in (None, "", [])
+            ]
+            if conflicts:
+                errors.append(
+                    "When input_type is 'reads', do not provide contigs/genbank inputs. "
+                    f"Conflicting fields: {', '.join(conflicts)}."
+                )
+        elif candidate == "contigs":
+            conflicts = [
+                name for name in ("paired_end_libs", "single_end_libs", "srr_ids", "genbank_file", "gto")
+                if params.get(name) not in (None, "", [])
+            ]
+            if conflicts:
+                errors.append(
+                    "When input_type is 'contigs', do not provide reads or genbank inputs. "
+                    f"Conflicting fields: {', '.join(conflicts)}."
+                )
+        elif candidate == "genbank":
+            conflicts = [
+                name for name in ("paired_end_libs", "single_end_libs", "srr_ids", "contigs", "reference_assembly")
+                if params.get(name) not in (None, "", [])
+            ]
+            if conflicts:
+                errors.append(
+                    "When input_type is 'genbank', do not provide reads/contigs assembly inputs. "
+                    f"Conflicting fields: {', '.join(conflicts)}."
+                )
 
     return errors
 

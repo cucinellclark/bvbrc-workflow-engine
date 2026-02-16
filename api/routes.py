@@ -159,6 +159,10 @@ async def validate_workflow(
     try:
         logger.info("Received workflow validation request")
         workflow_data = _sanitize_incoming_workflow_payload(workflow_data)
+        logger.info(
+            "Full workflow validation data (pre-validation):\n%s",
+            json.dumps(workflow_data, indent=2)
+        )
         auth_token = authorization
 
         result = workflow_manager.validate_workflow(

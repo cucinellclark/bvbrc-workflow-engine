@@ -20,6 +20,19 @@ from utils import metrics
 logger = get_logger(__name__)
 
 HOMOLOGY_PRECOMPUTED_DATABASES = {"bacteria-archaea", "viral-reference"}
+CGA_INPUT_TYPES = {"reads", "contigs", "genbank"}
+CGA_RECIPES = {
+    "auto",
+    "unicycler",
+    "canu",
+    "spades",
+    "meta-spades",
+    "plasmid-spades",
+    "single-cell",
+    "flye",
+}
+CGA_DOMAINS = {"Bacteria", "Archaea", "Viruses", "auto"}
+CGA_CODES = {0, 1, 4, 11, 25}
 
 
 class WorkflowExecutor:
@@ -478,6 +491,101 @@ class WorkflowExecutor:
                         )
                         logger.error(error_msg)
                         raise ValueError(error_msg)
+
+            if app_lower == "comprehensivegenomeanalysis":
+                input_type = params.get("input_type")
+                recipe = params.get("recipe")
+                domain = params.get("domain")
+                code = params.get("code")
+
+                input_type_candidate = (
+                    input_type.strip().lower()
+                    if isinstance(input_type, str)
+                    else input_type
+                )
+                if input_type_candidate not in CGA_INPUT_TYPES:
+                    raise ValueError(
+                        f"Workflow {workflow_id}: Step '{step_name}' has invalid input_type={input_type!r}. "
+                        f"Allowed values: {sorted(CGA_INPUT_TYPES)}."
+                    )
+
+                if recipe is not None:
+                    recipe_candidate = (
+                        recipe.strip().lower()
+                        if isinstance(recipe, str)
+                        else recipe
+                    )
+                    if recipe_candidate not in CGA_RECIPES:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has invalid recipe={recipe!r}. "
+                            f"Allowed values: {sorted(CGA_RECIPES)}."
+                        )
+
+                if domain is not None and domain not in CGA_DOMAINS:
+                    raise ValueError(
+                        f"Workflow {workflow_id}: Step '{step_name}' has invalid domain={domain!r}. "
+                        f"Allowed values: {sorted(CGA_DOMAINS)}."
+                    )
+
+                if code is not None:
+                    try:
+                        code_candidate = int(code)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has non-integer code={code!r}."
+                        ) from exc
+                    if code_candidate not in CGA_CODES:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has invalid code={code!r}. "
+                            f"Allowed values: {sorted(CGA_CODES)}."
+                        )
+
+                has_reads = any(
+                    params.get(name) not in (None, "", [])
+                    for name in ("paired_end_libs", "single_end_libs", "srr_ids")
+                )
+                has_contigs = any(
+                    params.get(name) not in (None, "", [])
+                    for name in ("contigs", "reference_assembly")
+                )
+                has_genbank = any(
+                    params.get(name) not in (None, "", [])
+                    for name in ("genbank_file", "gto")
+                )
+
+                if input_type_candidate == "reads":
+                    if not has_reads:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has input_type='reads' "
+                            "but no reads source (paired_end_libs/single_end_libs/srr_ids)."
+                        )
+                    if has_contigs or has_genbank:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has input_type='reads' "
+                            "but includes contigs/genbank fields. Remove conflicting inputs."
+                        )
+                elif input_type_candidate == "contigs":
+                    if not has_contigs:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has input_type='contigs' "
+                            "but no contig source (contigs/reference_assembly)."
+                        )
+                    if has_reads or has_genbank:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has input_type='contigs' "
+                            "but includes reads/genbank fields. Remove conflicting inputs."
+                        )
+                elif input_type_candidate == "genbank":
+                    if not has_genbank:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has input_type='genbank' "
+                            "but no genbank source (genbank_file/gto)."
+                        )
+                    if has_reads or has_contigs:
+                        raise ValueError(
+                            f"Workflow {workflow_id}: Step '{step_name}' has input_type='genbank' "
+                            "but includes reads/contigs fields. Remove conflicting inputs."
+                        )
             
             # Log the full job spec being sent to scheduler
             logger.info(
