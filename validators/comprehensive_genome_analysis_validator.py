@@ -75,15 +75,67 @@ def _normalize_legacy_cga_libs(params: Dict[str, Any]) -> tuple[Dict[str, Any], 
 
     paired_libs = normalized.get("paired_end_libs")
     if isinstance(paired_libs, list) and paired_libs:
+        # Variant: one object per pair using left_reads/right_reads (or r1/r2).
+        converted_pair_objects: List[Dict[str, Any]] = []
+        saw_left_right_shape = False
+        pair_alias_sets = (
+            ("left_reads", "right_reads"),
+            ("forward_reads", "reverse_reads"),
+            ("forward", "reverse"),
+            ("r1", "r2"),
+        )
+        for entry in paired_libs:
+            if not isinstance(entry, dict):
+                converted_pair_objects = []
+                break
+            read1 = entry.get("read1")
+            read2 = entry.get("read2")
+            if isinstance(read1, str) and read1.strip():
+                converted_pair_objects.append(entry)
+                continue
+            left = None
+            right = None
+            for left_key, right_key in pair_alias_sets:
+                left_candidate = entry.get(left_key)
+                right_candidate = entry.get(right_key)
+                if (
+                    isinstance(left_candidate, str)
+                    and left_candidate.strip()
+                    and isinstance(right_candidate, str)
+                    and right_candidate.strip()
+                ):
+                    left = left_candidate.strip()
+                    right = right_candidate.strip()
+                    break
+            if left and right:
+                saw_left_right_shape = True
+                converted_pair_objects.append(
+                    {
+                        "read1": left,
+                        "read2": right,
+                        "platform": entry.get("platform", "infer"),
+                        "interleaved": bool(entry.get("interleaved", False)),
+                        "read_orientation_outward": bool(entry.get("read_orientation_outward", False)),
+                    }
+                )
+            else:
+                converted_pair_objects = []
+                break
+        if saw_left_right_shape and converted_pair_objects:
+            normalized["paired_end_libs"] = converted_pair_objects
+            warnings.append(
+                "paired_end_libs used left_reads/right_reads; normalized to canonical read1/read2 objects."
+            )
+
         has_canonical_pair = any(
             isinstance(item, dict)
             and isinstance(item.get("read1"), str)
             and item.get("read1", "").strip()
-            for item in paired_libs
+            for item in normalized.get("paired_end_libs", [])
         )
         if not has_canonical_pair:
             legacy_files: List[str] = []
-            for entry in paired_libs:
+            for entry in normalized.get("paired_end_libs", []):
                 if isinstance(entry, dict):
                     file_path = _extract_non_empty_file(entry)
                     if file_path:
