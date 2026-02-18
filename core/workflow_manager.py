@@ -38,13 +38,13 @@ class WorkflowManager:
 
         logger.info("WorkflowManager initialized")
 
-    def plan_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, Any]:
-        """Persist a validated workflow plan without submitting it for execution.
+    def register_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, Any]:
+        """Register and persist a validated workflow without submitting it.
 
         Process:
         1. Resolve variable placeholders
         2. Validate workflow JSON
-        3. Generate workflow_id locally
+        3. Generate workflow_id
         4. Save to MongoDB with status='planned'
         5. Return workflow identity and summary metadata
 
@@ -56,10 +56,10 @@ class WorkflowManager:
             Dictionary with workflow_id, status, workflow_name, and step_count
         """
         try:
-            logger.info("Starting workflow planning")
+            logger.info("Starting workflow registration")
 
             logger.info(
-                f"Raw workflow JSON received for planning:\n{json.dumps(workflow_json, indent=2)}"
+                f"Raw workflow JSON received for registration:\n{json.dumps(workflow_json, indent=2)}"
             )
 
             # Step 1: Clean up empty optional lists before processing
@@ -67,18 +67,18 @@ class WorkflowManager:
             cleaned_workflow = clean_empty_optional_lists(workflow_json)
 
             # Step 2: Resolve variable placeholders
-            logger.info("Resolving variable placeholders for plan")
+            logger.info("Resolving variable placeholders for registration")
             resolved_workflow = VariableResolver.resolve_workflow_variables(cleaned_workflow)
 
             # Step 3: Validate workflow
-            logger.info("Validating workflow plan")
+            logger.info("Validating workflow for registration")
             validated_workflow = self.validator.validate_workflow_input(
                 resolved_workflow,
                 auth_token=auth_token
             )
 
             workflow_id = self._generate_workflow_id()
-            logger.info(f"Generated planned workflow_id: {workflow_id}")
+            logger.info(f"Generated workflow_id for registration: {workflow_id}")
 
             workflow_dict = validated_workflow.model_dump()
             workflow_dict['workflow_id'] = workflow_id
@@ -101,12 +101,12 @@ class WorkflowManager:
                 if 'status' not in step:
                     step['status'] = 'planned'
 
-            logger.info(f"Saving planned workflow {workflow_id} to database")
+            logger.info(f"Saving registered workflow {workflow_id} to database")
             self.state_manager.save_workflow(workflow_dict)
 
             step_count = len(workflow_dict.get('steps', []))
             logger.info(
-                f"Workflow '{validated_workflow.workflow_name}' planned successfully "
+                f"Workflow '{validated_workflow.workflow_name}' registered successfully "
                 f"with ID: {workflow_id} (status=planned)"
             )
 
@@ -118,128 +118,53 @@ class WorkflowManager:
             }
 
         except ValueError as e:
-            logger.error(f"Workflow planning validation failed: {e}")
+            logger.error(f"Workflow registration validation failed: {e}")
             raise
+        except Exception as e:
+            logger.error(f"Workflow registration failed: {e}")
+            raise
+
+    def plan_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, Any]:
+        """Backward-compatible alias for register_workflow()."""
+        try:
+            return self.register_workflow(workflow_json, auth_token=auth_token)
         except Exception as e:
             logger.error(f"Workflow planning failed: {e}")
             raise
 
     def submit_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, str]:
-        """Submit a new workflow.
+        """Submit a previously validated/registered workflow by workflow_id.
 
-        NEW BEHAVIOR: Does NOT submit to scheduler immediately.
-        The workflow executor will pick up pending workflows and submit steps.
-
-        Process:
-        1. Resolve variable placeholders (e.g., ${workspace_output_folder})
-        2. Validate workflow JSON
-        3. Generate workflow_id locally
-        4. Save to MongoDB with status='pending'
-        5. Return workflow ID (executor will pick it up and start execution)
+        This endpoint no longer generates workflow IDs. A workflow must first be
+        registered (planned) so it has a persisted workflow_id and status='planned'.
+        Submission promotes that workflow to status='pending'.
 
         Args:
-            workflow_json: Raw workflow JSON dictionary
-            auth_token: Optional authorization token for scheduler API calls
+            workflow_json: Workflow payload containing an existing workflow_id
+            auth_token: Optional authorization token to update stored token
 
         Returns:
             Dictionary with workflow_id and status
 
         Raises:
-            ValueError: If variable resolution or validation fails
+            ValueError: If workflow_id is missing or workflow cannot be submitted
             Exception: If submission fails
         """
         try:
-            logger.info("Starting workflow submission")
+            logger.info("Starting workflow submission for registered workflow")
+            if not isinstance(workflow_json, dict):
+                raise ValueError("submit_workflow requires a JSON object containing workflow_id")
 
-            # Log the raw incoming workflow JSON
-            logger.info(
-                f"Raw workflow JSON received:\n{json.dumps(workflow_json, indent=2)}"
-            )
+            workflow_id = workflow_json.get("workflow_id")
+            if not workflow_id:
+                raise ValueError(
+                    "submit_workflow requires an existing workflow_id. "
+                    "Register/plan the workflow first."
+                )
 
-            # Step 1: Clean up empty optional lists before processing
-            logger.info("Cleaning up empty optional lists in workflow")
-            cleaned_workflow = clean_empty_optional_lists(workflow_json)
+            return self.submit_planned_workflow(workflow_id, auth_token=auth_token)
 
-            # Step 2: Resolve variable placeholders
-            logger.info("Resolving variable placeholders")
-            resolved_workflow = VariableResolver.resolve_workflow_variables(
-                cleaned_workflow
-            )
-
-            # Log the resolved workflow
-            logger.info(
-                f"Resolved workflow after variable resolution:\n{json.dumps(resolved_workflow, indent=2)}"
-            )
-
-            # Step 2: Validate workflow
-            logger.info("Validating workflow")
-            validated_workflow = self.validator.validate_workflow_input(
-                resolved_workflow,
-                auth_token=auth_token
-            )
-
-            # Log the validated workflow
-            workflow_dict_before_id = validated_workflow.model_dump()
-            logger.info(
-                f"Validated workflow before adding workflow_id:\n{json.dumps(workflow_dict_before_id, indent=2)}"
-            )
-
-            # Step 3: Generate workflow ID locally (no scheduler call yet)
-            workflow_id = self._generate_workflow_id()
-            logger.info(f"Generated workflow_id: {workflow_id}")
-
-            # Convert to dict and add workflow_id
-            workflow_dict = validated_workflow.model_dump()
-            workflow_dict['workflow_id'] = workflow_id
-
-            # Step 4: Add initial status and timestamps
-            workflow_dict['status'] = 'pending'  # Executor will pick this up
-            workflow_dict['created_at'] = datetime.utcnow()
-            workflow_dict['updated_at'] = datetime.utcnow()
-
-            # Initialize step status (all pending, no step_ids yet)
-            for step in workflow_dict['steps']:
-                if 'status' not in step:
-                    step['status'] = 'pending'
-
-            # Store auth token (plaintext for now - TODO: encrypt)
-            if auth_token:
-                workflow_dict['auth_token'] = auth_token
-
-            # Initialize execution metadata
-            from models.workflow import ExecutionMetadata
-            max_parallel = config.executor.get('max_parallel_steps_per_workflow', 3)
-            workflow_dict['execution_metadata'] = ExecutionMetadata(
-                total_steps=len(workflow_dict['steps']),
-                completed_steps=0,
-                running_steps=0,
-                failed_steps=0,
-                pending_steps=len(workflow_dict['steps']),
-                currently_running_step_ids=[],
-                completed_step_ids=[],
-                max_parallel_steps=max_parallel
-            ).model_dump()
-
-            # Set log file path
-            log_dir = config.logging.get('workflow_log_dir', 'logs/workflows')
-            workflow_dict['log_file_path'] = f"{log_dir}/{workflow_id}.log"
-
-            # Step 5: Save to MongoDB
-            logger.info(f"Saving workflow {workflow_id} to database")
-            self.state_manager.save_workflow(workflow_dict)
-
-            logger.info(
-                f"Workflow '{validated_workflow.workflow_name}' submitted "
-                f"successfully with ID: {workflow_id} (status=pending, waiting for executor)"
-            )
-
-            return {
-                'workflow_id': workflow_id,
-                'status': 'pending'
-            }
-
-        except ValueError as e:
-            logger.error(f"Workflow validation failed: {e}")
+        except ValueError:
             raise
         except Exception as e:
             logger.error(f"Workflow submission failed: {e}")
@@ -565,8 +490,12 @@ class WorkflowManager:
             # Convert CWL to custom format
             custom_workflow = self.convert_cwl_workflow(cwl_data)
 
-            # Submit using existing workflow submission pipeline
-            return self.submit_workflow(custom_workflow, auth_token=auth_token)
+            # Register first to assign workflow_id, then submit by workflow_id.
+            registration = self.register_workflow(custom_workflow, auth_token=auth_token)
+            return self.submit_planned_workflow(
+                registration["workflow_id"],
+                auth_token=auth_token
+            )
 
         except ValueError as e:
             logger.error(f"CWL workflow submission failed: {e}")

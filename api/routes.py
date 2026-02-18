@@ -65,6 +65,15 @@ class PlanResponse(BaseModel):
     message: str = "Workflow planned successfully"
 
 
+class RegisterResponse(BaseModel):
+    """Response model for workflow registration."""
+    workflow_id: str
+    status: str
+    workflow_name: str
+    step_count: int
+    message: str = "Workflow registered successfully"
+
+
 class HealthResponse(BaseModel):
     """Response model for health check."""
     status: str
@@ -79,6 +88,49 @@ class ValidateResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     auto_fixes: list[str] = Field(default_factory=list)
     message: str = "Workflow validated successfully"
+
+
+@router.post(
+    "/workflows/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a workflow",
+    description="Validate, assign workflow_id, and persist a workflow with planned status."
+)
+async def register_workflow(
+    workflow_data: Dict[str, Any],
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> RegisterResponse:
+    """Register and persist a new workflow without execution side effects."""
+    try:
+        logger.info("Received workflow registration request")
+        workflow_data = _sanitize_incoming_workflow_payload(workflow_data)
+        logger.info(
+            "Full workflow registration data:\n%s",
+            json.dumps(workflow_data, indent=2)
+        )
+
+        auth_token = authorization
+        result = workflow_manager.register_workflow(workflow_data, auth_token=auth_token)
+
+        return RegisterResponse(
+            workflow_id=result["workflow_id"],
+            status=result["status"],
+            workflow_name=result["workflow_name"],
+            step_count=result["step_count"]
+        )
+    except ValueError as e:
+        logger.error(f"Workflow registration validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Workflow registration failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
 @router.post(
@@ -161,25 +213,23 @@ async def submit_planned_workflow(
 @router.post(
     "/workflows/submit",
     response_model=SubmitResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Submit a new workflow",
-    description="Submit a workflow for execution. The workflow JSON should not "
-                "contain workflow_id or step_id fields as these are assigned by "
-                "the scheduler. Authorization token should be provided in the "
-                "Authorization header for scheduler API calls."
+    status_code=status.HTTP_200_OK,
+    summary="Submit a registered workflow",
+    description="Submit a previously validated/registered workflow for execution. "
+                "Request payload must include an existing workflow_id."
 )
 async def submit_workflow(
     workflow_data: Dict[str, Any],
     authorization: Optional[str] = Header(None, alias="Authorization")
 ) -> SubmitResponse:
-    """Submit a new workflow.
+    """Submit a previously registered workflow.
 
     Args:
-        workflow_data: Workflow JSON dictionary
+        workflow_data: Payload containing workflow_id
         authorization: Optional authorization token in Authorization header
 
     Returns:
-        Submission response with workflow_id
+        Submission response with workflow_id and pending status
 
     Raises:
         HTTPException: 400 for validation errors, 500 for server errors
