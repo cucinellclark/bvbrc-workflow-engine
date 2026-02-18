@@ -9,7 +9,7 @@ class BaseContext(BaseModel):
     """Base context for workflow execution."""
     base_url: str
     workspace_output_folder: str
-    
+
     class Config:
         extra = "allow"  # Allow additional fields
 
@@ -22,7 +22,7 @@ class WorkflowStep(BaseModel):
     outputs: Optional[Dict[str, str]] = None
     depends_on: Optional[List[str]] = None
     step_id: Optional[str] = None  # Assigned by scheduler when job is submitted
-    
+
     # Execution tracking fields
     status: Optional[str] = "pending"
     task_id: Optional[str] = None  # Scheduler task ID (same as step_id when submitted)
@@ -31,7 +31,7 @@ class WorkflowStep(BaseModel):
     completed_at: Optional[datetime] = None
     elapsed_time: Optional[str] = None
     error_message: Optional[str] = None
-    
+
     class Config:
         extra = "forbid"
 
@@ -43,7 +43,7 @@ class WorkflowDefinition(BaseModel):
     base_context: BaseContext
     steps: List[WorkflowStep]
     workflow_outputs: Optional[List[str]] = None
-    
+
     @field_validator('steps')
     @classmethod
     def validate_steps_not_empty(cls, v):
@@ -51,7 +51,7 @@ class WorkflowDefinition(BaseModel):
         if not v:
             raise ValueError("Workflow must contain at least one step")
         return v
-    
+
     class Config:
         extra = "forbid"
 
@@ -66,7 +66,7 @@ class ExecutionMetadata(BaseModel):
     currently_running_step_ids: List[str] = Field(default_factory=list)
     completed_step_ids: List[str] = Field(default_factory=list)
     max_parallel_steps: int = 3
-    
+
     class Config:
         extra = "allow"
 
@@ -79,26 +79,27 @@ class WorkflowSubmission(BaseModel):
     base_context: BaseContext
     steps: List[WorkflowStep]
     workflow_outputs: Optional[List[str]] = None
-    
+
     # Status and timestamps
     status: str = "pending"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    
+
     # Execution tracking
     execution_metadata: Optional[ExecutionMetadata] = None
     auth_token: Optional[str] = None  # Stored plaintext for now (TODO: encrypt)
     log_file_path: Optional[str] = None
     error_message: Optional[str] = None
-    
+
     class Config:
         extra = "allow"
 
 
 class WorkflowStatusEnum(str, Enum):
     """Workflow status enumeration."""
+    PLANNED = "planned"          # Planned and persisted, not yet submitted for execution
     PENDING = "pending"          # Created but not yet picked up by executor
     QUEUED = "queued"            # Picked up by executor, waiting to start
     RUNNING = "running"          # Currently executing steps
@@ -135,7 +136,7 @@ class WorkflowStatus(BaseModel):
     created_at: datetime
     updated_at: datetime
     steps: List[StepStatus]
-    
+
     class Config:
         json_encoders = {
             datetime: lambda v: v.isoformat()

@@ -56,6 +56,15 @@ class SubmitResponse(BaseModel):
     message: str = "Workflow submitted successfully"
 
 
+class PlanResponse(BaseModel):
+    """Response model for workflow planning."""
+    workflow_id: str
+    status: str
+    workflow_name: str
+    step_count: int
+    message: str = "Workflow planned successfully"
+
+
 class HealthResponse(BaseModel):
     """Response model for health check."""
     status: str
@@ -73,6 +82,83 @@ class ValidateResponse(BaseModel):
 
 
 @router.post(
+    "/workflows/plan",
+    response_model=PlanResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Plan a workflow",
+    description="Validate and persist a workflow plan without submitting it for execution."
+)
+async def plan_workflow(
+    workflow_data: Dict[str, Any],
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> PlanResponse:
+    """Plan and persist a new workflow without execution side effects."""
+    try:
+        logger.info("Received workflow planning request")
+        workflow_data = _sanitize_incoming_workflow_payload(workflow_data)
+        logger.info(
+            "Full workflow planning data:\n%s",
+            json.dumps(workflow_data, indent=2)
+        )
+
+        auth_token = authorization
+        result = workflow_manager.plan_workflow(workflow_data, auth_token=auth_token)
+
+        return PlanResponse(
+            workflow_id=result["workflow_id"],
+            status=result["status"],
+            workflow_name=result["workflow_name"],
+            step_count=result["step_count"]
+        )
+    except ValueError as e:
+        logger.error(f"Workflow planning validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Workflow planning failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@router.post(
+    "/workflows/{workflow_id}/submit",
+    response_model=SubmitResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Submit a planned workflow",
+    description="Promote an existing planned workflow to pending execution."
+)
+async def submit_planned_workflow(
+    workflow_id: str,
+    authorization: Optional[str] = Header(None, alias="Authorization")
+) -> SubmitResponse:
+    """Submit an existing planned workflow by ID."""
+    try:
+        logger.info(f"Received planned workflow submission request for {workflow_id}")
+        auth_token = authorization
+        result = workflow_manager.submit_planned_workflow(workflow_id, auth_token=auth_token)
+        return SubmitResponse(
+            workflow_id=result['workflow_id'],
+            status=result['status']
+        )
+    except ValueError as e:
+        logger.error(f"Planned workflow submission validation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Planned workflow submission failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+
+@router.post(
     "/workflows/submit",
     response_model=SubmitResponse,
     status_code=status.HTTP_201_CREATED,
@@ -87,36 +173,36 @@ async def submit_workflow(
     authorization: Optional[str] = Header(None, alias="Authorization")
 ) -> SubmitResponse:
     """Submit a new workflow.
-    
+
     Args:
         workflow_data: Workflow JSON dictionary
         authorization: Optional authorization token in Authorization header
-        
+
     Returns:
         Submission response with workflow_id
-        
+
     Raises:
         HTTPException: 400 for validation errors, 500 for server errors
     """
     try:
         logger.info("Received workflow submission request")
         workflow_data = _sanitize_incoming_workflow_payload(workflow_data)
-        
+
         # Log the full incoming workflow data for debugging
         logger.info(
             f"Full workflow submission data:\n{json.dumps(workflow_data, indent=2)}"
         )
-        
+
         # Extract auth token from Authorization header if provided
         auth_token = authorization
-        
+
         result = workflow_manager.submit_workflow(workflow_data, auth_token=auth_token)
-        
+
         return SubmitResponse(
             workflow_id=result['workflow_id'],
             status=result['status']
         )
-        
+
     except ValueError as e:
         logger.error(f"Validation error: {e}")
         raise HTTPException(
@@ -200,23 +286,23 @@ async def validate_workflow(
 )
 async def get_workflow_status(workflow_id: str) -> WorkflowStatus:
     """Get status of a workflow.
-    
+
     Args:
         workflow_id: Workflow identifier
-        
+
     Returns:
         Workflow status information
-        
+
     Raises:
         HTTPException: 404 if not found, 500 for server errors
     """
     try:
         logger.info(f"Received status request for workflow {workflow_id}")
-        
+
         status_info = workflow_manager.get_workflow_status(workflow_id)
-        
+
         return status_info
-        
+
     except ValueError as e:
         logger.error(f"Workflow not found: {e}")
         raise HTTPException(
@@ -238,23 +324,23 @@ async def get_workflow_status(workflow_id: str) -> WorkflowStatus:
 )
 async def get_workflow(workflow_id: str) -> Dict[str, Any]:
     """Get complete workflow document.
-    
+
     Args:
         workflow_id: Workflow identifier
-        
+
     Returns:
         Complete workflow dictionary
-        
+
     Raises:
         HTTPException: 404 if not found, 500 for server errors
     """
     try:
         logger.info(f"Received full workflow request for {workflow_id}")
-        
+
         workflow = workflow_manager.get_full_workflow(workflow_id)
-        
+
         return workflow
-        
+
     except ValueError as e:
         logger.error(f"Workflow not found: {e}")
         raise HTTPException(
@@ -284,31 +370,31 @@ async def submit_cwl_workflow(
     authorization: Optional[str] = Header(None, alias="Authorization")
 ) -> SubmitResponse:
     """Submit a CWL workflow.
-    
+
     Args:
         workflow_data: CWL workflow dictionary (YAML or JSON format)
         authorization: Optional authorization token in Authorization header
-        
+
     Returns:
         Submission response with workflow_id
-        
+
     Raises:
         HTTPException: 400 for validation/conversion errors, 500 for server errors
     """
     try:
         logger.info("Received CWL workflow submission request")
-        
+
         # Extract auth token from Authorization header if provided
         auth_token = authorization
-        
+
         result = workflow_manager.submit_cwl_workflow(workflow_data, auth_token=auth_token)
-        
+
         return SubmitResponse(
             workflow_id=result['workflow_id'],
             status=result['status'],
             message="CWL workflow converted and submitted successfully"
         )
-        
+
     except ValueError as e:
         logger.error(f"CWL workflow conversion/validation error: {e}")
         raise HTTPException(
@@ -331,42 +417,42 @@ async def submit_cwl_workflow(
 )
 async def cancel_workflow(workflow_id: str) -> Dict[str, Any]:
     """Cancel a workflow.
-    
+
     Args:
         workflow_id: Workflow identifier
-        
+
     Returns:
         Cancellation confirmation
-        
+
     Raises:
         HTTPException: 404 if not found, 400 if already completed, 500 for errors
     """
     try:
         logger.info(f"Received cancellation request for workflow {workflow_id}")
-        
+
         # Get workflow
         workflow = workflow_manager.get_full_workflow(workflow_id)
-        
+
         current_status = workflow.get('status')
-        
+
         # Check if workflow is already in terminal state
         if current_status in ['succeeded', 'failed', 'cancelled']:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cannot cancel workflow with status '{current_status}'"
             )
-        
+
         # Update status to cancelled
         workflow_manager.update_workflow_status(workflow_id, 'cancelled')
-        
+
         logger.info(f"Workflow {workflow_id} marked as cancelled")
-        
+
         return {
             "workflow_id": workflow_id,
             "status": "cancelled",
             "message": "Workflow cancellation requested. Executor will stop processing."
         }
-        
+
     except ValueError as e:
         logger.error(f"Workflow not found: {e}")
         raise HTTPException(
@@ -391,7 +477,7 @@ async def cancel_workflow(workflow_id: str) -> Dict[str, Any]:
 )
 async def health_check() -> HealthResponse:
     """Health check endpoint.
-    
+
     Returns:
         Health status information
     """
@@ -402,7 +488,7 @@ async def health_check() -> HealthResponse:
     except Exception as e:
         logger.error(f"MongoDB health check failed: {e}")
         mongodb_status = "disconnected"
-    
+
     return HealthResponse(
         status="healthy" if mongodb_status == "connected" else "degraded",
         mongodb=mongodb_status
