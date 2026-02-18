@@ -3,6 +3,7 @@ workflow_venv/
 
 ecosystem.config.js
 config.yaml
+bvbrc_groups_module
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

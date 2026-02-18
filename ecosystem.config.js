@@ -1,15 +1,15 @@
 // Port configuration
 const API_HOST = '140.221.78.67';
-const API_PORT = 12007;
-const METRICS_PORT = 9090;
+const API_PORT = 12008;
+const METRICS_PORT = 9091;
 
 // Base paths
-const BASE_DIR = '/home/ac.cucinell/bvbrc-dev/WorkflowEngineDev/workflow_engine';
+const BASE_DIR = '/home/ac.cucinell/bvbrc-dev/Copilot/DevEnvironment/bvbrc-workflow-engine';
 
 module.exports = {
   apps: [
     {
-      name: 'workflow-engine-api',
+      name: 'workflow-engine-api-development',
       script: './scripts/start_api.sh',
       interpreter: 'bash',
       cwd: BASE_DIR,
@@ -36,7 +36,7 @@ module.exports = {
       min_uptime: '10s'
     },
     {
-      name: 'workflow-engine-executor',
+      name: 'workflow-engine-executor-development',
       script: './scripts/start_executor.sh',
       interpreter: 'bash',
       cwd: BASE_DIR,

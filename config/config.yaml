@@ -2,14 +2,14 @@ mongodb:
   host: 140.221.78.16
   port: 27018
   database: copilot
-  collection: workflows
+  collection: workflows-dev
   username: null
   password: null
   auth_source: admin
 
 api:
   host: 140.221.78.67 
-  port: 12007 
+  port: 12008 
   debug: false
 
 scheduler:
@@ -33,5 +33,5 @@ logging:
 # Metrics and observability
 metrics:
   enable_prometheus: true
-  port: 9090
+  port: 9091
 

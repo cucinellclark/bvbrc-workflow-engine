@@ -9,6 +9,7 @@ from scheduler.client import SchedulerClient
 from models.workflow import WorkflowStatus, StepStatus
 from utils.logger import get_logger
 from utils.variable_resolver import VariableResolver
+from utils.workflow_cleaner import clean_empty_optional_lists
 from config.config import config
 from cwl.converter import CWLConverter
 from cwl.parser import CWLParser
@@ -61,11 +62,15 @@ class WorkflowManager:
                 f"Raw workflow JSON received for planning:\n{json.dumps(workflow_json, indent=2)}"
             )
 
-            # Step 1: Resolve variable placeholders
-            logger.info("Resolving variable placeholders for plan")
-            resolved_workflow = VariableResolver.resolve_workflow_variables(workflow_json)
+            # Step 1: Clean up empty optional lists before processing
+            logger.info("Cleaning up empty optional lists in workflow")
+            cleaned_workflow = clean_empty_optional_lists(workflow_json)
 
-            # Step 2: Validate workflow
+            # Step 2: Resolve variable placeholders
+            logger.info("Resolving variable placeholders for plan")
+            resolved_workflow = VariableResolver.resolve_workflow_variables(cleaned_workflow)
+
+            # Step 3: Validate workflow
             logger.info("Validating workflow plan")
             validated_workflow = self.validator.validate_workflow_input(
                 resolved_workflow,
@@ -151,10 +156,14 @@ class WorkflowManager:
                 f"Raw workflow JSON received:\n{json.dumps(workflow_json, indent=2)}"
             )
 
-            # Step 1: Resolve variable placeholders
+            # Step 1: Clean up empty optional lists before processing
+            logger.info("Cleaning up empty optional lists in workflow")
+            cleaned_workflow = clean_empty_optional_lists(workflow_json)
+
+            # Step 2: Resolve variable placeholders
             logger.info("Resolving variable placeholders")
             resolved_workflow = VariableResolver.resolve_workflow_variables(
-                workflow_json
+                cleaned_workflow
             )
 
             # Log the resolved workflow
@@ -331,9 +340,13 @@ class WorkflowManager:
             # Keep immutable copies for reporting.
             original_workflow = json.loads(json.dumps(workflow_json))
 
-            # Step 1: Resolve variable placeholders.
+            # Step 1: Clean up empty optional lists before processing
+            logger.info("Cleaning up empty optional lists in workflow")
+            cleaned_workflow = clean_empty_optional_lists(workflow_json)
+
+            # Step 2: Resolve variable placeholders.
             logger.info("Resolving variable placeholders for validation")
-            resolved_workflow = VariableResolver.resolve_workflow_variables(workflow_json)
+            resolved_workflow = VariableResolver.resolve_workflow_variables(cleaned_workflow)
 
             # Step 2: Validate workflow and apply service-level normalization/defaults.
             logger.info("Validating workflow")
