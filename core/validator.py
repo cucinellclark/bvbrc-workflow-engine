@@ -122,12 +122,10 @@ class WorkflowValidator:
             ValueError: If validation fails
         """
         try:
-            # Check that workflow_id is NOT present (input format)
+            # workflow_id is now optional - if present, it will be preserved
+            # If not present, the caller (register/submit) will generate one
             if 'workflow_id' in workflow_data:
-                raise ValueError(
-                    "Input workflow should not contain 'workflow_id'. "
-                    "IDs are assigned by the scheduler."
-                )
+                logger.info(f"Validating workflow with existing workflow_id: {workflow_data['workflow_id']}")
             
             # Check that step_id is NOT present in any step
             for step in workflow_data.get('steps', []):

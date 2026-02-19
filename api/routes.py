@@ -138,7 +138,7 @@ async def register_workflow(
     response_model=PlanResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Plan a workflow",
-    description="Validate and persist a workflow plan without submitting it for execution."
+    description="Persist a workflow plan (job spec) with a generated workflow_id without validating or submitting it."
 )
 async def plan_workflow(
     workflow_data: Dict[str, Any],
@@ -163,7 +163,7 @@ async def plan_workflow(
             step_count=result["step_count"]
         )
     except ValueError as e:
-        logger.error(f"Workflow planning validation error: {e}")
+        logger.error(f"Workflow planning error: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
@@ -214,18 +214,18 @@ async def submit_planned_workflow(
     "/workflows/submit",
     response_model=SubmitResponse,
     status_code=status.HTTP_200_OK,
-    summary="Submit a registered workflow",
-    description="Submit a previously validated/registered workflow for execution. "
-                "Request payload must include an existing workflow_id."
+    summary="Validate and submit a workflow spec",
+    description="Validate a workflow specification and submit it for execution. "
+                "For backward compatibility, payloads containing only workflow_id are also accepted."
 )
 async def submit_workflow(
     workflow_data: Dict[str, Any],
     authorization: Optional[str] = Header(None, alias="Authorization")
 ) -> SubmitResponse:
-    """Submit a previously registered workflow.
+    """Validate and submit a workflow.
 
     Args:
-        workflow_data: Payload containing workflow_id
+        workflow_data: Workflow specification payload (or workflow_id-only payload)
         authorization: Optional authorization token in Authorization header
 
     Returns:

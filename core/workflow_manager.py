@@ -77,10 +77,15 @@ class WorkflowManager:
                 auth_token=auth_token
             )
 
-            workflow_id = self._generate_workflow_id()
-            logger.info(f"Generated workflow_id for registration: {workflow_id}")
-
+            # Generate workflow_id only if not already present
             workflow_dict = validated_workflow.model_dump()
+            if 'workflow_id' in resolved_workflow and resolved_workflow['workflow_id']:
+                workflow_id = resolved_workflow['workflow_id']
+                logger.info(f"Using existing workflow_id for registration: {workflow_id}")
+            else:
+                workflow_id = self._generate_workflow_id()
+                logger.info(f"Generated new workflow_id for registration: {workflow_id}")
+            
             workflow_dict['workflow_id'] = workflow_id
             workflow_dict['status'] = 'planned'
             workflow_dict['created_at'] = datetime.utcnow()
@@ -125,22 +130,73 @@ class WorkflowManager:
             raise
 
     def plan_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, Any]:
-        """Backward-compatible alias for register_workflow()."""
+        """Persist a workflow plan without validation.
+
+        Planning intentionally stores the user/LLM-produced job spec as-is (after
+        lightweight cleanup/variable resolution) so validation can be a separate,
+        explicit stage.
+        """
         try:
-            return self.register_workflow(workflow_json, auth_token=auth_token)
+            logger.info("Starting workflow planning (no validation)")
+            if not isinstance(workflow_json, dict):
+                raise ValueError("plan_workflow requires a JSON object")
+
+            cleaned_workflow = clean_empty_optional_lists(workflow_json)
+            planned_workflow = VariableResolver.resolve_workflow_variables(cleaned_workflow)
+
+            workflow_id = self._generate_workflow_id()
+            workflow_name = planned_workflow.get("workflow_name") or "Planned Workflow"
+
+            workflow_dict = json.loads(json.dumps(planned_workflow))
+            workflow_dict["workflow_id"] = workflow_id
+            workflow_dict["status"] = "planned"
+            workflow_dict["created_at"] = datetime.utcnow()
+            workflow_dict["updated_at"] = datetime.utcnow()
+
+            # Planned workflows should not have execution state initialized yet.
+            workflow_dict.pop("execution_metadata", None)
+            workflow_dict.pop("log_file_path", None)
+            workflow_dict.pop("started_at", None)
+            workflow_dict.pop("completed_at", None)
+
+            if auth_token:
+                workflow_dict["auth_token"] = auth_token
+
+            steps = workflow_dict.get("steps", [])
+            if not isinstance(steps, list):
+                raise ValueError("Workflow plan must contain a 'steps' array")
+
+            for step in steps:
+                if isinstance(step, dict) and "status" not in step:
+                    step["status"] = "planned"
+
+            self.state_manager.save_workflow(workflow_dict)
+            logger.info(
+                "Workflow planned successfully with ID: %s (status=planned, no validation)",
+                workflow_id
+            )
+
+            return {
+                "workflow_id": workflow_id,
+                "status": "planned",
+                "workflow_name": workflow_name,
+                "step_count": len(steps),
+            }
         except Exception as e:
             logger.error(f"Workflow planning failed: {e}")
             raise
 
     def submit_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, str]:
-        """Submit a previously validated/registered workflow by workflow_id.
+        """Validate and submit a workflow specification.
 
-        This endpoint no longer generates workflow IDs. A workflow must first be
-        registered (planned) so it has a persisted workflow_id and status='planned'.
-        Submission promotes that workflow to status='pending'.
+        This endpoint validates a workflow spec using the same pipeline as the
+        validation endpoint, registers it as planned, then submits it.
+
+        Backward compatibility: if payload only contains workflow_id, submission
+        is delegated to submit_planned_workflow().
 
         Args:
-            workflow_json: Workflow payload containing an existing workflow_id
+            workflow_json: Workflow specification payload or workflow_id-only payload
             auth_token: Optional authorization token to update stored token
 
         Returns:
@@ -151,18 +207,22 @@ class WorkflowManager:
             Exception: If submission fails
         """
         try:
-            logger.info("Starting workflow submission for registered workflow")
+            logger.info("Starting workflow submission from workflow spec")
             if not isinstance(workflow_json, dict):
-                raise ValueError("submit_workflow requires a JSON object containing workflow_id")
+                raise ValueError("submit_workflow requires a JSON object")
 
             workflow_id = workflow_json.get("workflow_id")
-            if not workflow_id:
-                raise ValueError(
-                    "submit_workflow requires an existing workflow_id. "
-                    "Register/plan the workflow first."
+            if workflow_id and "steps" not in workflow_json:
+                logger.info(
+                    "submit_workflow received workflow_id-only payload; delegating to planned submission"
                 )
+                return self.submit_planned_workflow(workflow_id, auth_token=auth_token)
 
-            return self.submit_planned_workflow(workflow_id, auth_token=auth_token)
+            registration = self.register_workflow(workflow_json, auth_token=auth_token)
+            return self.submit_planned_workflow(
+                registration["workflow_id"],
+                auth_token=auth_token
+            )
 
         except ValueError:
             raise
@@ -171,7 +231,7 @@ class WorkflowManager:
             raise
 
     def submit_planned_workflow(self, workflow_id: str, auth_token: str = None) -> Dict[str, str]:
-        """Promote a persisted planned workflow to pending execution.
+        """Validate and promote a persisted planned workflow to pending execution.
 
         Args:
             workflow_id: Planned workflow identifier
@@ -187,12 +247,28 @@ class WorkflowManager:
                 raise ValueError(f"Workflow {workflow_id} not found")
 
             current_status = workflow.get('status')
-            if current_status not in ('planned', 'pending'):
+            if current_status == 'pending':
+                logger.info("Workflow %s is already pending; treating submit as idempotent", workflow_id)
+                return {
+                    'workflow_id': workflow_id,
+                    'status': 'pending'
+                }
+
+            if current_status != 'planned':
                 raise ValueError(
                     f"Workflow {workflow_id} cannot be submitted from status '{current_status}'"
                 )
 
-            steps = workflow.get('steps', [])
+            # Validation is intentionally done at submission time for planned workflows.
+            validation_token = auth_token or workflow.get("auth_token")
+            workflow_for_validation = self._sanitize_workflow_for_validation(workflow)
+            validated_workflow = self.validator.validate_workflow_input(
+                workflow_for_validation,
+                auth_token=validation_token
+            )
+            validated_workflow_dict = validated_workflow.model_dump()
+
+            steps = validated_workflow_dict.get('steps', [])
             for step in steps:
                 if isinstance(step, dict):
                     step['status'] = 'pending'
@@ -211,12 +287,13 @@ class WorkflowManager:
             ).model_dump()
 
             log_dir = config.logging.get('workflow_log_dir', 'logs/workflows')
-            updates = {
+            updates = dict(validated_workflow_dict)
+            updates.update({
                 'steps': steps,
                 'status': 'pending',
                 'execution_metadata': execution_metadata,
                 'log_file_path': f"{log_dir}/{workflow_id}.log"
-            }
+            })
             if auth_token:
                 updates['auth_token'] = auth_token
 
@@ -234,6 +311,48 @@ class WorkflowManager:
         except Exception as e:
             logger.error(f"Failed to submit planned workflow {workflow_id}: {e}")
             raise
+
+    @staticmethod
+    def _sanitize_workflow_for_validation(workflow: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove persistence/runtime fields before validator input checks.
+        
+        Note: workflow_id is now preserved to support validation of workflows
+        that already have an assigned ID.
+        """
+        payload = json.loads(json.dumps(workflow or {}))
+
+        # workflow_id is intentionally NOT removed - validation now allows it
+        for top_level_field in (
+            "status",
+            "created_at",
+            "updated_at",
+            "submitted_at",
+            "started_at",
+            "completed_at",
+            "error_message",
+            "execution_metadata",
+            "log_file_path",
+            "auth_token",
+        ):
+            payload.pop(top_level_field, None)
+
+        if isinstance(payload.get("steps"), list):
+            for step in payload["steps"]:
+                if not isinstance(step, dict):
+                    continue
+                for step_field in (
+                    "step_id",
+                    "status",
+                    "task_id",
+                    "submitted_at",
+                    "started_at",
+                    "completed_at",
+                    "elapsed_time",
+                    "error_message",
+                ):
+                    step.pop(step_field, None)
+
+        return payload
 
     def validate_workflow(self, workflow_json: Dict[str, Any], auth_token: str = None) -> Dict[str, Any]:
         """Validate a workflow without submission side effects.
