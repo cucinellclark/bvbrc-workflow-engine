@@ -9,7 +9,7 @@ dnspython==2.8.0
 fastapi==0.129.0
 h11==0.16.0
 idna==3.11
-networkx==3.6.1
+networkx==3.4.2
 prometheus_client==0.24.1
 pydantic==2.12.5
 pydantic_core==2.41.5

@@ -9,7 +9,7 @@
 #   ./install.sh --help       # Show this help message
 #
 # Prerequisites:
-#   - Python 3.11+
+#   - Python 3.10+
 #   - pip
 #   - Access to MongoDB instance (configured in config/config.yaml)
 #
@@ -26,7 +26,7 @@ VENV_DIR="${SCRIPT_DIR}/workflow_venv"
 REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
 CONFIG_FILE="${SCRIPT_DIR}/config/config.yaml"
 MIN_PYTHON_MAJOR=3
-MIN_PYTHON_MINOR=11
+MIN_PYTHON_MINOR=10
 
 # ---- Colors (disabled if not a terminal) ----
 if [ -t 1 ]; then
@@ -63,8 +63,8 @@ done
 
 # ---- Step 1: Locate Python ----
 find_python() {
-    # Prefer python3.11, then python3, then python
-    for cmd in python3.11 python3 python; do
+    # Prefer python3.10+, then python3, then python
+    for cmd in python3.11 python3.10 python3 python; do
         if command -v "$cmd" &>/dev/null; then
             echo "$cmd"
             return
